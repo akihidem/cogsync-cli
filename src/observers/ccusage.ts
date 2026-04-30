@@ -16,6 +16,7 @@ export type Window5hBlock = {
   endTime: Date;
   actualEndTime: Date;
   isActive: boolean;
+  isGap: boolean;
   entries: number;
   tokenCounts: {
     inputTokens: number;
@@ -98,6 +99,16 @@ export async function fetchActiveBlock(timeoutMs = 30000): Promise<Window5hBlock
   return normalizeBlock(active);
 }
 
+/**
+ * 過去全ブロックを取得（gap 除外なし、呼び出し側で判断）。
+ * バックテスト用。
+ */
+export async function fetchAllBlocks(timeoutMs = 60000): Promise<Window5hBlock[]> {
+  const raw = await runCcusage(["blocks", "--json"], timeoutMs);
+  const parsed = parseResponse(raw);
+  return parsed.blocks.map(normalizeBlock);
+}
+
 function runCcusage(args: string[], timeoutMs: number): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn("npx", ["-y", "ccusage@latest", ...args], {
@@ -151,6 +162,7 @@ function normalizeBlock(b: RawBlock): Window5hBlock {
     endTime: new Date(b.endTime),
     actualEndTime: new Date(b.actualEndTime ?? b.startTime),
     isActive: b.isActive,
+    isGap: b.isGap ?? false,
     entries: b.entries,
     tokenCounts: b.tokenCounts,
     totalTokens: b.totalTokens,
