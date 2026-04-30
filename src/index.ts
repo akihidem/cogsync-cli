@@ -8,13 +8,25 @@
 import { Command } from "commander";
 import { fetchActiveBlock, CcusageError } from "./observers/ccusage.ts";
 import { computeWindowStatus, formatStatusLine } from "./infer/window5h.ts";
+import { loadConfig } from "./config.ts";
 
 const program = new Command();
 
 program
   .name("cogsync")
   .description("AI のリミット回復サイクルと人間の集中サイクルを同期させる CLI コーチ")
-  .version("0.1.0-alpha.0");
+  .version("0.1.0-alpha.0")
+  .option("--config <path>", "設定ファイルパス（既定 ~/.config/cogsync/config.yaml、env COGSYNC_CONFIG でも上書き）");
+
+program
+  .command("config")
+  .description("解決後の設定を表示（デバッグ用）")
+  .action(() => {
+    const opts = program.opts<{ config?: string }>();
+    const { config, loadedFrom } = loadConfig({ override: opts.config });
+    console.log(`# loaded from: ${loadedFrom.join(" > ")}`);
+    console.log(JSON.stringify(config, null, 2));
+  });
 
 program
   .command("status")
