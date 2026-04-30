@@ -50,6 +50,11 @@ type AssistantUsage = {
   };
 };
 
+type AnyRecord = {
+  type?: string;
+  timestamp?: string;
+};
+
 /**
  * ログディレクトリ配下の全 JSONL ファイルを列挙する。
  * mtime 降順で返す。
@@ -140,4 +145,37 @@ export function snapshotRecentSessions(
     const samples = readSessionSamples(f);
     return { file: f, latest: samples.length > 0 ? samples[samples.length - 1]! : null };
   });
+}
+
+/**
+ * セッションファイルから最新の user / assistant タイムスタンプを取り出す。
+ * AI 処理状態判定 (work_state) に使う。
+ *
+ * 末尾から走査して各タイプ最初の 1 件で early break。
+ */
+export function readLastEventTimestamps(
+  file: SessionFile,
+): { lastUserAt: Date | null; lastAssistantAt: Date | null } {
+  const text = readFileSync(file.path, "utf8");
+  const lines = text.split("\n");
+  let lastUser: Date | null = null;
+  let lastAssistant: Date | null = null;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!;
+    if (line.length === 0) continue;
+    let rec: AnyRecord;
+    try {
+      rec = JSON.parse(line) as AnyRecord;
+    } catch {
+      continue;
+    }
+    if (!rec.timestamp) continue;
+    if (rec.type === "user" && !lastUser) {
+      lastUser = new Date(rec.timestamp);
+    } else if (rec.type === "assistant" && !lastAssistant) {
+      lastAssistant = new Date(rec.timestamp);
+    }
+    if (lastUser && lastAssistant) break;
+  }
+  return { lastUserAt: lastUser, lastAssistantAt: lastAssistant };
 }

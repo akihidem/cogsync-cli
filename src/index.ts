@@ -21,7 +21,7 @@ const program = new Command();
 program
   .name("cogsync")
   .description("AI のリミット回復サイクルと人間の集中サイクルを同期させる CLI コーチ")
-  .version("0.2.0-alpha.0")
+  .version("0.3.0-alpha.0")
   .option("--config <path>", "設定ファイルパス（既定 ~/.config/cogsync/config.yaml、env COGSYNC_CONFIG でも上書き）");
 
 program
@@ -32,6 +32,35 @@ program
     const { config, loadedFrom } = loadConfig({ override: opts.config });
     console.log(`# loaded from: ${loadedFrom.join(" > ")}`);
     console.log(JSON.stringify(config, null, 2));
+  });
+
+program
+  .command("skill")
+  .description("過去ログから並列稼働数の分布を推定し、parallelCapacity の推奨値を表示")
+  .option("--days <n>", "対象期間 (日)", "30")
+  .option("--bucket-sec <n>", "ビン幅 (秒)", "60")
+  .option("--active-window-min <n>", "アクティブ判定の前後猶予 (分)", "5")
+  .action(async (opts: { days: string; bucketSec: string; activeWindowMin: string }) => {
+    const cliOpts = program.opts<{ config?: string }>();
+    const { config } = loadConfig({ override: cliOpts.config });
+    const { estimateSkillFromLogs } = await import("./infer/skill.ts");
+    const est = estimateSkillFromLogs(config.observers.claudeCode.logDir, {
+      recentDays: Number(opts.days),
+      bucketSec: Number(opts.bucketSec),
+      activeWindowMin: Number(opts.activeWindowMin),
+    });
+    if (!est) {
+      console.error("no usable session data");
+      process.exit(1);
+    }
+    console.log(`recommended parallelCapacity: ${est.recommendedParallel}`);
+    console.log(`distribution (active bins):  median=${est.distribution.median}  p75=${est.distribution.p75}  p90=${est.distribution.p90}  max=${est.distribution.max}`);
+    console.log(`bins: ${est.activeBins} active / ${est.observedBins} total | sessions: ${est.sessions}`);
+    console.log("");
+    console.log(`現在の config の parallelCapacity: ${config.profile.parallelCapacity}`);
+    console.log(`設定変更例: ~/.config/cogsync/config.yaml に`);
+    console.log(`  profile:`);
+    console.log(`    parallelCapacity: ${est.recommendedParallel}`);
   });
 
 program
@@ -95,6 +124,9 @@ program
   .option("--question <s...>", "未解決の論点（複数可）", [])
   .option("--next <s>", "次のアクション")
   .option("--json <s>", "JSON 文字列で一括指定（個別 --flag より優先）")
+  .option("--llm", "現アクティブセッションから Ollama で自動要約 (--goal などと両立可、上書き)")
+  .option("--ollama-url <url>", "Ollama URL", "http://localhost:11434")
+  .option("--model <m>", "Ollama モデル", "gemma4:latest")
   .option("--no-clipboard", "クリップボードへコピーしない")
   .action(async (opts: {
     title?: string;
@@ -104,10 +136,35 @@ program
     question?: string[];
     next?: string;
     json?: string;
+    llm?: boolean;
+    ollamaUrl: string;
+    model: string;
     clipboard: boolean;
   }) => {
     let struct: HandoffStruct;
-    if (opts.json) {
+    if (opts.llm) {
+      const { snapshotRecentSessions } = await import("./observers/claude_code.ts");
+      const { summarizeWithOllama } = await import("./handoff/llm.ts");
+      const cliOpts = program.opts<{ config?: string }>();
+      const { config } = (await import("./config.ts")).loadConfig({ override: cliOpts.config });
+      const snap = snapshotRecentSessions(config.observers.claudeCode.logDir, 1);
+      const top = snap[0];
+      if (!top) {
+        console.error("error: no active Claude session found");
+        process.exit(2);
+      }
+      console.error(`[cogsync] summarizing ${top.file.sessionId.slice(0, 8)} via ${opts.model}...`);
+      struct = await summarizeWithOllama(top.file.path, {
+        ollamaUrl: opts.ollamaUrl,
+        model: opts.model,
+      });
+      // CLI フラグで上書き
+      if (opts.goal) struct.goal = opts.goal;
+      if (opts.state) struct.state = opts.state;
+      if (opts.next) struct.nextAction = opts.next;
+      if (opts.decision && opts.decision.length > 0) struct.decisions = opts.decision;
+      if (opts.question && opts.question.length > 0) struct.openQuestions = opts.question;
+    } else if (opts.json) {
       struct = parseHandoffJson(opts.json);
     } else {
       const missing: string[] = [];
@@ -117,7 +174,7 @@ program
       if (missing.length > 0) {
         console.error(
           `error: missing required: ${missing.join(", ")}\n` +
-            `       (or pass --json '{"goal":"...","state":"...","nextAction":"...","decisions":[...],"openQuestions":[...]}')`,
+            `       (or pass --json ... or --llm)`,
         );
         process.exit(2);
       }
@@ -192,10 +249,28 @@ program
 
 program
   .command("pomodoro")
-  .description("適応的ポモドーロ: pomodoro start|stop（v0.3）")
+  .description("適応的ポモドーロ: pomodoro start [--focus 25] [--break 5] [--cycles 4] [--no-adaptive]")
   .argument("<action>", "start | stop")
-  .action((_action: string) => {
-    console.log("cogsync pomodoro — not implemented yet (v0.3)");
+  .option("--focus <n>", "集中分", "25")
+  .option("--break <n>", "休憩分", "5")
+  .option("--cycles <n>", "セット数 (0 で無限)", "0")
+  .option(
+    "--early-break-min <n>",
+    "AI 処理待ちがこの分以上ならブレイクへ前倒し (0 で無効)",
+    "8",
+  )
+  .action(async (action: string, opts: { focus: string; break: string; cycles: string; earlyBreakMin: string }) => {
+    if (action !== "start") {
+      console.error("supported: pomodoro start (stop は SIGINT で)");
+      process.exit(2);
+    }
+    const { runAdaptivePomodoro } = await import("./timer/adaptive.ts");
+    await runAdaptivePomodoro({
+      focusMin: Number(opts.focus),
+      breakMin: Number(opts.break),
+      cycles: Number(opts.cycles),
+      aiBusyEarlyBreakMin: Number(opts.earlyBreakMin),
+    });
   });
 
 program.parseAsync(process.argv);

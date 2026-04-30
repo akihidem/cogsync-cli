@@ -17,9 +17,11 @@ export type PersistedState = {
   /** スキーマバージョン。今後増やす可能性あり */
   schema: 1;
   phase?: PhaseState | null;
+  /** ディープワーク累積（DeepWorkAccumulator.toJSON() の戻り値） */
+  deepWork?: { byDate: Record<string, number> } | null;
 };
 
-const EMPTY: PersistedState = { schema: 1, phase: null };
+const EMPTY: PersistedState = { schema: 1, phase: null, deepWork: null };
 
 export function defaultStatePath(): string {
   const xdg = process.env["XDG_STATE_HOME"];
@@ -72,6 +74,16 @@ export class JsonStore {
 
   getPhase(): PhaseState | null {
     return this.read().phase ?? null;
+  }
+
+  saveDeepWork(data: { byDate: Record<string, number> }): void {
+    const state = this.read();
+    state.deepWork = data;
+    this.write(state);
+  }
+
+  loadDeepWork(): { byDate: Record<string, number> } | null {
+    return this.read().deepWork ?? null;
   }
 
   get path_(): string {

@@ -58,6 +58,27 @@ const TEMPLATES: Record<string, (vars: Record<string, string | number>) => Rende
       `今日の集中時間が ${v["accumulated_min"]} 分（上限 ${v["daily_cap_min"]} 分）に到達。\n` +
       `これ以降は精度が落ちやすい。シャローワークか終了を推奨。`,
   }),
+  deep_break_suggested: (v) => ({
+    title: "cogsync — ブレイク推奨",
+    body:
+      `AI 処理待ちが ${v["ai_busy_min"]} 分続いています。\n` +
+      `${v["suggested_break_min"]} 分のディープ・ブレイクを推奨。今 PC から離れるのが最適です。`,
+  }),
+  pomodoro_focus_started: (v) => ({
+    title: `pomodoro #${v["cycle"]} — focus`,
+    body:
+      v["focus_min"] === 0
+        ? `AI 処理待ちが長いため早期ブレイクへ移行します。`
+        : `集中 ${v["focus_min"]} 分開始。終了予定 ${v["ends_hhmm"]}。`,
+  }),
+  pomodoro_break_started: (v) => ({
+    title: `pomodoro #${v["cycle"]} — break`,
+    body: `休憩 ${v["break_min"]} 分。再開予定 ${v["ends_hhmm"]}。席を立つことを推奨。`,
+  }),
+  pomodoro_break_ended: (v) => ({
+    title: `pomodoro #${v["cycle"]} — back to focus`,
+    body: `休憩終了。次の集中フェーズへ。`,
+  }),
 };
 
 export interface DesktopNotifier {

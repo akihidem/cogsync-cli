@@ -28,6 +28,7 @@ export type CogsyncConfig = {
   thresholds: {
     snowballToken: number;
     limitWarnMin: number;
+    aiWaitBreakMin: number;
   };
   notify: {
     tone: "neutral" | "librarian" | "coach" | "kansai";
@@ -52,6 +53,8 @@ export const DEFAULT_CONFIG: CogsyncConfig = {
     // 150k (≈ p90 強) で 約 12% に絞り、本当に Lost-in-the-middle 圏のものを通知。
     snowballToken: 150_000,
     limitWarnMin: 15,
+    /** ai_busy がこの分以上続いたらブレイク提案（CO-5） */
+    aiWaitBreakMin: 5,
   },
   notify: {
     tone: "neutral",

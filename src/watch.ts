@@ -1,20 +1,30 @@
 /**
- * watch: 常駐ループ
+ * watch: 常駐ループ (v0.3)
  *
- * v0.2:
- * - ccusage 5h ブロック観測 (window5h)
- * - raw JSONL スナップショット + 雪だるま検出 (snowball)
- * - phase store 参照
- * - coach/advise でアクション選択 → notify
+ * 観測:
+ *   - ccusage 5h ブロック (TTL キャッシュ)
+ *   - raw JSONL の最新 user/assistant タイムスタンプ
+ * 推論:
+ *   - WindowStatus (残量/枯渇予測)
+ *   - SnowballState (コンテキスト膨張)
+ *   - WorkState (ai_busy / active / idle)
+ *   - DeepWorkAccumulator (当日累積分)
+ * 指南:
+ *   - advise() ルールベース、優先順位: snowball > 残量 > 上限到達 > ブレイク提案
  *
- * 同種通知は (block.id + templateId) または (sessionId + templateId) で dedup。
- * SIGINT/SIGTERM でグレースフル終了。
+ * 通知 dedup: (sessionId or block.id) + templateId
  */
 
 import { fetchActiveBlockCached, CcusageError } from "./observers/ccusage.ts";
 import { computeWindowStatus, formatStatusLine, type WindowStatus } from "./infer/window5h.ts";
-import { snapshotRecentSessions } from "./observers/claude_code.ts";
+import {
+  snapshotRecentSessions,
+  readSessionSamples,
+  readLastEventTimestamps,
+  type SessionFile,
+} from "./observers/claude_code.ts";
 import { detectSnowball, type SnowballState } from "./infer/snowball.ts";
+import { classifyWorkState, DeepWorkAccumulator, type WorkState } from "./infer/work_state.ts";
 import { advise, type Advice } from "./coach/advise.ts";
 import { createDesktopNotifier, type NotifyRequest } from "./notify/desktop.ts";
 import { JsonStore } from "./state/store.ts";
@@ -33,7 +43,11 @@ export async function runWatch(opts: WatchOptions): Promise<void> {
   const pollingSec = opts.pollingSecOverride ?? config.observers.ccusage.pollingSec;
   const notifier = createDesktopNotifier(config.notify.tone);
   const store = new JsonStore();
+  const accum = new DeepWorkAccumulator();
+  accum.loadFromJSON(store.loadDeepWork());
   const fired = new Set<FiredKey>();
+  let aiBusySince: Date | null = null;
+  let lastSavedAt = 0;
 
   await notifier.notify({
     template: "watch_started",
@@ -46,70 +60,115 @@ export async function runWatch(opts: WatchOptions): Promise<void> {
     if (stopped) return;
     stopped = true;
     console.log(`\n[cogsync] received ${sig}, stopping watch.`);
+    // 終了前に保存
+    store.saveDeepWork(accum.toJSON());
   };
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
 
-  await tick({ notifier, fired, config, store });
-  if (opts.once) return;
+  const ctx = { notifier, fired, config, store, accum };
+  const result = await tick(ctx, aiBusySince);
+  aiBusySince = result.aiBusySince;
+  if (opts.once) {
+    store.saveDeepWork(accum.toJSON());
+    return;
+  }
 
   while (!stopped) {
     await sleep(pollingSec * 1000, () => stopped);
     if (stopped) break;
     try {
-      await tick({ notifier, fired, config, store });
+      const r = await tick(ctx, aiBusySince);
+      aiBusySince = r.aiBusySince;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[cogsync] tick error: ${msg}`);
     }
+    // 1 分に 1 回 deepWork を永続化
+    if (Date.now() - lastSavedAt > 60_000) {
+      store.saveDeepWork(accum.toJSON());
+      lastSavedAt = Date.now();
+    }
   }
 }
 
-type TickArgs = {
+type Ctx = {
   notifier: ReturnType<typeof createDesktopNotifier>;
   fired: Set<FiredKey>;
   config: CogsyncConfig;
   store: JsonStore;
+  accum: DeepWorkAccumulator;
 };
 
-async function tick({ notifier, fired, config, store }: TickArgs): Promise<void> {
+async function tick(ctx: Ctx, aiBusySince: Date | null): Promise<{ aiBusySince: Date | null }> {
+  const { config, store, accum, fired, notifier } = ctx;
   const pollingSec = config.observers.ccusage.pollingSec;
+
   const window = await safeFetchWindow(pollingSec);
-  const snowball = await safeSnapshotSnowball(config);
+
+  const sessionInfo = safeReadLatestSession(config);
+  const snowball = sessionInfo
+    ? detectSnowball(readSessionSamples(sessionInfo.file), config.thresholds.snowballToken)
+    : null;
+
+  const now = new Date();
+  const ws = sessionInfo
+    ? classifyWorkState(sessionInfo.lastUserAt, sessionInfo.lastAssistantAt, now)
+    : { state: "idle" as WorkState, lastUserAt: null, lastAssistantAt: null, reason: "no session" };
+
+  // ai_busy 起算時刻の更新
+  let nextAiBusySince: Date | null;
+  if (ws.state === "ai_busy") {
+    nextAiBusySince = aiBusySince ?? ws.lastUserAt ?? now;
+  } else {
+    nextAiBusySince = null;
+  }
+  const aiBusyDurationMin = nextAiBusySince
+    ? Math.max(0, (now.getTime() - nextAiBusySince.getTime()) / 60000)
+    : 0;
+
+  // ディープワーク累積
+  accum.feed(ws.state, now);
+  const deepWorkMin = accum.todayMin(now);
+
   const phaseState = store.getPhase();
   const phase = phaseState?.phase ?? "implement";
 
+  // status 行
   const statusBits: string[] = [`[${nowHHMMSS()}]`];
   if (window) statusBits.push(formatStatusLine(window));
   else statusBits.push("no active 5h block");
-  if (snowball.state) {
+  if (snowball) {
     statusBits.push(
-      `| snowball ${kf(snowball.state.cumulativeTokens)}/${kf(snowball.state.threshold)}` +
-        (snowball.state.triggered ? " (TRIG)" : ""),
+      `| snowball ${kf(snowball.cumulativeTokens)}/${kf(snowball.threshold)}` +
+        (snowball.triggered ? " (TRIG)" : ""),
     );
   }
+  statusBits.push(`| ws=${ws.state}` + (aiBusyDurationMin > 0 ? `(${aiBusyDurationMin.toFixed(1)}m)` : ""));
+  statusBits.push(`| dw=${deepWorkMin}m`);
   statusBits.push(`| phase=${phase}`);
   console.log(statusBits.join(" "));
 
   const adv: Advice = advise({
     phase,
     window,
-    snowball: snowball.state,
-    deepWorkAccumMin: 0, // v0.2 ではディープワーク追跡未実装、常に 0
+    snowball,
+    workState: ws.state,
+    aiBusyDurationMin: Math.round(aiBusyDurationMin * 10) / 10,
+    deepWorkAccumMin: deepWorkMin,
     parallelCapacity: config.profile.parallelCapacity,
     limitWarnMin: config.thresholds.limitWarnMin,
     dailyDeepWorkCapMin: config.profile.dailyDeepWorkCapMin,
+    aiWaitBreakMin: config.thresholds.aiWaitBreakMin,
   });
 
-  if (adv.action === "continue" || !adv.templateId) return;
+  if (adv.action === "continue" || !adv.templateId) {
+    return { aiBusySince: nextAiBusySince };
+  }
 
-  // dedup key: 5h ブロック ID か セッション ID + templateId
-  const dedupBase =
-    adv.templateId === "snowball_detected"
-      ? snowball.sessionId ?? "no-session"
-      : window?.endsAt.toISOString() ?? "no-window";
+  const dedupBase = pickDedupKey(adv, sessionInfo, window);
   const key: FiredKey = `${dedupBase}:${adv.templateId}`;
-  if (fired.has(key)) return;
+  if (fired.has(key)) return { aiBusySince: nextAiBusySince };
   fired.add(key);
 
   const req: NotifyRequest = {
@@ -119,10 +178,25 @@ async function tick({ notifier, fired, config, store }: TickArgs): Promise<void>
   };
   await notifier.notify(req);
   console.log(`  -> [${adv.action}] ${adv.rationale}`);
+
+  return { aiBusySince: nextAiBusySince };
+}
+
+function pickDedupKey(
+  adv: Advice,
+  sessionInfo: { file: SessionFile } | null,
+  window: WindowStatus | null,
+): string {
+  if (adv.templateId === "snowball_detected" || adv.templateId === "deep_break_suggested") {
+    return sessionInfo?.file.sessionId ?? "no-session";
+  }
+  if (adv.templateId === "deepwork_cap_reached") {
+    return new Date().toISOString().slice(0, 10); // 1 日 1 回
+  }
+  return window?.endsAt.toISOString() ?? "no-window";
 }
 
 async function safeFetchWindow(pollingSec: number): Promise<WindowStatus | null> {
-  // キャッシュ TTL は pollingSec の 90% (=ポーリング 1 周期内では再取得しない)
   const ttlMs = Math.max(5_000, pollingSec * 1000 * 0.9);
   try {
     const block = await fetchActiveBlockCached(ttlMs);
@@ -136,22 +210,22 @@ async function safeFetchWindow(pollingSec: number): Promise<WindowStatus | null>
   }
 }
 
-async function safeSnapshotSnowball(
-  config: CogsyncConfig,
-): Promise<{ state: SnowballState | null; sessionId: string | null }> {
-  if (!config.observers.claudeCode.enabled) return { state: null, sessionId: null };
+function safeReadLatestSession(config: CogsyncConfig): {
+  file: SessionFile;
+  lastUserAt: Date | null;
+  lastAssistantAt: Date | null;
+} | null {
+  if (!config.observers.claudeCode.enabled) return null;
   try {
     const snap = snapshotRecentSessions(config.observers.claudeCode.logDir, 1);
     const top = snap[0];
-    if (!top || !top.latest) return { state: null, sessionId: null };
-    const { readSessionSamples } = await import("./observers/claude_code.ts");
-    const samples = readSessionSamples(top.file);
-    const state = detectSnowball(samples, config.thresholds.snowballToken);
-    return { state, sessionId: top.file.sessionId };
+    if (!top) return null;
+    const ts = readLastEventTimestamps(top.file);
+    return { file: top.file, lastUserAt: ts.lastUserAt, lastAssistantAt: ts.lastAssistantAt };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[cogsync] snowball snapshot error: ${msg}`);
-    return { state: null, sessionId: null };
+    console.error(`[cogsync] safeReadLatestSession: ${msg}`);
+    return null;
   }
 }
 
@@ -161,6 +235,7 @@ function severityFor(adv: Advice): "info" | "nudge" | "warn" | "critical" {
     case "limit_approaching":
       return "warn";
     case "snowball_detected":
+    case "deep_break_suggested":
       return "nudge";
     case "deepwork_cap_reached":
       return "warn";

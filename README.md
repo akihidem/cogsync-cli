@@ -25,16 +25,18 @@
 | --- | --- | --- |
 | OB-1 | ccusage から 5h ブロック取得 | ✅ 子プロセス呼出 + TTL キャッシュ |
 | OB-2 | 5h ウィンドウ残量と終了時刻予測 | ✅ |
-| IN-2 | 雪だるま効果検出 | ✅ raw JSONL 走査、デフォ閾値 150k (バックテスト調整済) |
-| IN-3 | リミット枯渇までの予測 | ✅ ccusage projection 委譲 |
-| IN-4 | スキル熟度推定 | 未着手 (v0.3) |
-| IN-5 | ディープワーク累積追跡 | 未着手 (v0.3) |
-| CO-1 | フェーズ別モデル提案 | ✅ phase set/get、recommendedModelsFor |
+| IN-2 | 雪だるま効果検出 | ✅ raw JSONL 走査、デフォ閾値 150k |
+| IN-3 | リミット枯渇までの予測 | ✅ |
+| IN-4 | スキル熟度推定 | ✅ `cogsync skill` コマンド (過去 30 日の並列稼働分布から p90) |
+| IN-5 | ディープワーク累積追跡 | ✅ DeepWorkAccumulator、watch で当日累積 |
+| CO-1 | フェーズ別モデル提案 | ✅ |
 | CO-3 | フェーズ移行時のハンドオフ・プロンプト生成 | ✅ |
-| CO-4 | リミット接近通知 | ✅ watch + WSL→PowerShell トースト |
-| CO-5 | AI 処理中のディープ・ブレイク提案 | 未着手 (v0.3) |
-| TI-1 | 適応的ポモドーロ（AI 処理時間で動的伸縮） | 未着手 (v0.3) |
-| HO-1 | ハンドオフ・プロンプトのテンプレ提供 | ✅ |
+| CO-4 | リミット接近通知 | ✅ |
+| CO-5 | AI 処理中のディープ・ブレイク提案 | ✅ ai_busy 5 分超で `deep_break_suggested` |
+| TI-1 | 適応的ポモドーロ（AI 処理時間で動的伸縮） | ✅ `cogsync pomodoro start` |
+| HO-1 | ハンドオフ・プロンプトのテンプレ提供 | ✅ + `--llm` で Ollama 自動要約 |
+| HO-2 | クリップボード | ✅ clip.exe/wl-copy/xclip/pbcopy フォールバック |
+| HO-4 | MCP サーバ化 | 未着手 (v1.0) |
 
 `docs/DESIGN.md` に内部設計、`src/` に責務スケルトンを配置済み。
 
@@ -98,9 +100,13 @@ npm run watch                                      # 常駐モード（ポーリ
 npx tsx src/index.ts watch --once                  # 動作確認用ワンショット
 npx tsx src/index.ts config                        # 解決後の設定を表示
 npx tsx src/index.ts handoff --goal ... --state ... --next ...  # ハンドオフ生成＋クリップボード
+npx tsx src/index.ts handoff --llm                 # 現セッションを Ollama (gemma4) で自動要約
+npx tsx src/index.ts skill                         # 過去 30 日から並列稼働数を推定
 npx tsx scripts/backtest-window5h.ts               # 過去 5h ブロックの集計レポート
-npx tsx src/index.ts phase set design              # フェーズ手動切替（v0.2）
-npx tsx src/index.ts pomodoro start                # 適応的ポモドーロ開始（v0.3）
+npx tsx scripts/backtest-snowball.ts               # 雪だるま閾値の発火頻度
+npx tsx scripts/backtest-replay.ts --limit 20      # 時系列バックテスト
+npx tsx src/index.ts phase set design              # フェーズ手動切替
+npx tsx src/index.ts pomodoro start --focus 25 --break 5 --cycles 4  # 適応的ポモドーロ
 ```
 
 ### 実出力例
@@ -158,4 +164,4 @@ MIT を予定（v1.0 公開時に確定）。
 
 ## ステータス
 
-**v0.2.0-alpha.0**：`status` / `watch` / `config` / `handoff` / `phase` の MVP〜 が一通り動作。watch は ccusage 5h ブロック観測 + raw JSONL 雪だるま検出 + advise + WSL→PowerShell トースト + TTL キャッシュ統合済み。`pomodoro` / スキル熟度推定 / ディープワーク追跡 / ブレイク提案は v0.3。
+**v0.3.0-alpha.0**：MVP 全コマンドが動作。watch は ccusage 5h ブロック観測 + raw JSONL 雪だるま検出 + AI 処理状態判定 (active/ai_busy/idle) + DeepWorkAccumulator + advise + WSL→PowerShell トースト + TTL キャッシュ統合済み。`pomodoro start` で適応ポモドーロ、`skill` でスキル熟度推定、`handoff --llm` で Ollama 自動要約、`scripts/backtest-replay.ts` で時系列バックテスト。MCP サーバ化は v1.0。

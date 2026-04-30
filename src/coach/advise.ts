@@ -8,6 +8,7 @@
 import type { Phase } from "./phase.ts";
 import type { WindowStatus } from "../infer/window5h.ts";
 import type { SnowballState } from "../infer/snowball.ts";
+import type { WorkState } from "../infer/work_state.ts";
 
 export type Advice = {
   action:
@@ -19,7 +20,12 @@ export type Advice = {
   rationale: string;
   confidence: number;
   /** notify テンプレ ID（必要時のみ） */
-  templateId?: "snowball_detected" | "limit_approaching" | "burn_exhaustion" | "deepwork_cap_reached";
+  templateId?:
+    | "snowball_detected"
+    | "limit_approaching"
+    | "burn_exhaustion"
+    | "deepwork_cap_reached"
+    | "deep_break_suggested";
   /** notify テンプレに渡す変数 */
   vars?: Record<string, string | number>;
 };
@@ -28,12 +34,17 @@ export type AdviseInput = {
   phase: Phase;
   window: WindowStatus | null;
   snowball: SnowballState | null;
+  workState: WorkState;
+  /** ai_busy が継続している分数（active/idle 時は 0） */
+  aiBusyDurationMin: number;
   deepWorkAccumMin: number;
   parallelCapacity: number;
   /** 設定: limit 警告閾値 */
   limitWarnMin: number;
   /** 設定: ディープワーク日次上限 */
   dailyDeepWorkCapMin: number;
+  /** 設定: ai_busy がこの分以上ならブレイク提案 */
+  aiWaitBreakMin: number;
 };
 
 export function advise(input: AdviseInput): Advice {
@@ -86,6 +97,20 @@ export function advise(input: AdviseInput): Advice {
       vars: {
         accumulated_min: input.deepWorkAccumMin,
         daily_cap_min: input.dailyDeepWorkCapMin,
+      },
+    };
+  }
+
+  // 優先順位 4: AI 処理中の長時間待機 → ブレイク推奨 (CO-5)
+  if (input.workState === "ai_busy" && input.aiBusyDurationMin >= input.aiWaitBreakMin) {
+    return {
+      action: "take_break",
+      rationale: `AI 処理待ち ${input.aiBusyDurationMin} 分継続中。今のうちに席を立つのが効率的。`,
+      confidence: 0.75,
+      templateId: "deep_break_suggested",
+      vars: {
+        ai_busy_min: input.aiBusyDurationMin,
+        suggested_break_min: Math.max(5, input.aiBusyDurationMin),
       },
     };
   }
