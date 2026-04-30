@@ -23,15 +23,15 @@
 
 | ID | 機能 | 状態 |
 | --- | --- | --- |
-| OB-1 | ccusage / `~/.claude/projects/**/*.jsonl` から 5h ブロック取得 | 未着手 |
-| OB-2 | 5h ウィンドウ残量と終了時刻予測 | 未着手 |
-| IN-2 | 雪だるま効果検出 | 未着手 |
-| IN-3 | リミット枯渇までの予測 | 未着手 |
-| CO-3 | フェーズ移行時のハンドオフ・プロンプト生成 | 未着手 |
-| CO-4 | リミット接近通知 | 未着手 |
-| CO-5 | AI 処理中のディープ・ブレイク提案 | 未着手 |
-| TI-1 | 適応的ポモドーロ（AI 処理時間で動的伸縮） | 未着手 |
-| HO-1 | ハンドオフ・プロンプトのテンプレ提供 | 未着手 |
+| OB-1 | ccusage から 5h ブロック取得 | ✅ 実装済 (子プロセス呼出) |
+| OB-2 | 5h ウィンドウ残量と終了時刻予測 | ✅ 実装済 |
+| IN-2 | 雪だるま効果検出 | 未着手 (v0.2) |
+| IN-3 | リミット枯渇までの予測 | ✅ 実装済 (ccusage projection 委譲) |
+| CO-3 | フェーズ移行時のハンドオフ・プロンプト生成 | ✅ テンプレのみ実装 |
+| CO-4 | リミット接近通知 | ✅ 実装済 (watch + node-notifier) |
+| CO-5 | AI 処理中のディープ・ブレイク提案 | 未着手 (v0.2) |
+| TI-1 | 適応的ポモドーロ（AI 処理時間で動的伸縮） | 未着手 (v0.3) |
+| HO-1 | ハンドオフ・プロンプトのテンプレ提供 | ✅ 実装済 (`cogsync handoff`) |
 
 `docs/DESIGN.md` に内部設計、`src/` に責務スケルトンを配置済み。
 
@@ -89,10 +89,13 @@ cogsync-cli/
 
 ```bash
 npm install                                        # 依存インストール
-npm run status                                     # 現在の 5h ウィンドウ残量を 1 行表示（v0.1 実装済み）
+npm run status                                     # 現在の 5h ウィンドウ残量を 1 行表示
 npm run status -- --json                           # JSON 出力（プログラム消費用）
-npm run watch                                      # 常駐モード（v0.1.x 実装予定）
-npx tsx src/index.ts handoff                       # ハンドオフ・プロンプト生成（v0.2）
+npm run watch                                      # 常駐モード（ポーリング＋通知）
+npx tsx src/index.ts watch --once                  # 動作確認用ワンショット
+npx tsx src/index.ts config                        # 解決後の設定を表示
+npx tsx src/index.ts handoff --goal ... --state ... --next ...  # ハンドオフ生成＋クリップボード
+npx tsx scripts/backtest-window5h.ts               # 過去 5h ブロックの集計レポート
 npx tsx src/index.ts phase set design              # フェーズ手動切替（v0.2）
 npx tsx src/index.ts pomodoro start                # 適応的ポモドーロ開始（v0.3）
 ```
@@ -107,10 +110,49 @@ Claude 5h ウィンドウ | 残り 4h16m | (終了 17:00) | 累計 2.81M | 8,636
 `残り` は **5h ウィンドウ終了時刻** と **現バーンレート想定の枯渇予測時刻** の早い方を採用。
 枯渇予測が先に来た場合は `(枯渇予測 HH:MM - 現バーンレート想定)` と表示される。
 
+```text
+$ npx tsx src/index.ts watch --once
+[12:48:30] Claude 5h ウィンドウ | 残り 4h11m | (終了 17:00) | 累計 13.34M | 9,916 tok/min
+```
+
+```text
+$ npx tsx src/index.ts handoff --title 認証 --goal "JWT を分離" --state "extract 済み" --next "Cookie 経路を extract" --decision "JWT は別 MW"
+# Handoff: 認証
+- Goal: JWT を分離
+- State: extract 済み
+- Decisions:
+  - JWT は別 MW
+- Open Questions:
+  (none)
+- Next Action: Cookie 経路を extract
+[Created by cogsync at 2026-04-30T...]
+[cogsync] copied to clipboard via clip.exe
+```
+
+### 設定
+
+`~/.config/cogsync/config.yaml` で上書き可能。`--config <path>` または環境変数 `COGSYNC_CONFIG` でも上書き。
+
+```yaml
+profile:
+  parallelCapacity: 3
+  dailyDeepWorkCapMin: 240
+thresholds:
+  snowballToken: 80000
+  limitWarnMin: 15
+notify:
+  tone: neutral
+  quietDuringAiWork: true
+observers:
+  ccusage:
+    enabled: true
+    pollingSec: 30
+```
+
 ## ライセンス
 
 MIT を予定（v1.0 公開時に確定）。
 
 ## ステータス
 
-**v0.1.0-alpha.0**：`cogsync status` が動作（ccusage 子プロセス呼び出しで 5h ウィンドウ残量を 1 行表示）。`watch` / `handoff` / `phase` / `pomodoro` は未実装。
+**v0.1.0-alpha.1**：`status` / `watch` / `config` / `handoff` の MVP コマンド一式が動作。`phase` / `pomodoro` は v0.2/v0.3。

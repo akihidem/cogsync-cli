@@ -9,13 +9,19 @@ import { Command } from "commander";
 import { fetchActiveBlock, CcusageError } from "./observers/ccusage.ts";
 import { computeWindowStatus, formatStatusLine } from "./infer/window5h.ts";
 import { loadConfig } from "./config.ts";
+import {
+  renderStandard,
+  parseHandoffJson,
+  type HandoffStruct,
+} from "./handoff/template.ts";
+import { copyToClipboard } from "./util/clipboard.ts";
 
 const program = new Command();
 
 program
   .name("cogsync")
   .description("AI のリミット回復サイクルと人間の集中サイクルを同期させる CLI コーチ")
-  .version("0.1.0-alpha.0")
+  .version("0.1.0-alpha.1")
   .option("--config <path>", "設定ファイルパス（既定 ~/.config/cogsync/config.yaml、env COGSYNC_CONFIG でも上書き）");
 
 program
@@ -81,9 +87,62 @@ program
 
 program
   .command("handoff")
-  .description("ハンドオフ・プロンプトを生成して標準出力＋クリップボード（v0.2）")
-  .action(() => {
-    console.log("cogsync handoff — not implemented yet (v0.2)");
+  .description("ハンドオフ・プロンプトを生成して標準出力＋クリップボード")
+  .option("--title <s>", "ハンドオフのタイトル")
+  .option("--goal <s>", "目標")
+  .option("--state <s>", "現状")
+  .option("--decision <s...>", "確定事項（複数可）", [])
+  .option("--question <s...>", "未解決の論点（複数可）", [])
+  .option("--next <s>", "次のアクション")
+  .option("--json <s>", "JSON 文字列で一括指定（個別 --flag より優先）")
+  .option("--no-clipboard", "クリップボードへコピーしない")
+  .action(async (opts: {
+    title?: string;
+    goal?: string;
+    state?: string;
+    decision?: string[];
+    question?: string[];
+    next?: string;
+    json?: string;
+    clipboard: boolean;
+  }) => {
+    let struct: HandoffStruct;
+    if (opts.json) {
+      struct = parseHandoffJson(opts.json);
+    } else {
+      const missing: string[] = [];
+      if (!opts.goal) missing.push("--goal");
+      if (!opts.state) missing.push("--state");
+      if (!opts.next) missing.push("--next");
+      if (missing.length > 0) {
+        console.error(
+          `error: missing required: ${missing.join(", ")}\n` +
+            `       (or pass --json '{"goal":"...","state":"...","nextAction":"...","decisions":[...],"openQuestions":[...]}')`,
+        );
+        process.exit(2);
+      }
+      struct = {
+        goal: opts.goal!,
+        state: opts.state!,
+        nextAction: opts.next!,
+        decisions: opts.decision ?? [],
+        openQuestions: opts.question ?? [],
+      };
+    }
+
+    const out = renderStandard(struct, opts.title);
+    process.stdout.write(out.text);
+
+    if (opts.clipboard) {
+      const r = await copyToClipboard(out.text);
+      if (r.ok) {
+        console.error(`\n[cogsync] copied to clipboard via ${r.via}`);
+      } else {
+        console.error(
+          `\n[cogsync] clipboard copy failed (tried: ${r.tried.join(", ")}). text printed to stdout above.`,
+        );
+      }
+    }
   });
 
 program

@@ -1,6 +1,6 @@
 {
   "name": "cogsync-cli",
-  "version": "0.1.0-alpha.0",
+  "version": "0.1.0-alpha.1",
   "description": "AI のリミット回復サイクルと人間の集中サイクルを同期させる CLI コーチ",
   "type": "module",
   "private": true,
