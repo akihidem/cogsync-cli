@@ -88,8 +88,8 @@ export class CcusageError extends Error {
  * `npx ccusage` を 1 回呼び出し、アクティブブロックを返す。
  * アクティブブロックが無ければ null。
  *
- * NOTE: 起動コストが大きいため（数秒）、常駐モードでは別プロセスでバックグラウンド
- * ポーリングし、状態をキャッシュする。v0.1 のワンショット status では許容する。
+ * NOTE: 起動コストが 1〜3 秒あるため、watch ループではキャッシュ版
+ * fetchActiveBlockCached を使う。
  */
 export async function fetchActiveBlock(timeoutMs = 30000): Promise<Window5hBlock | null> {
   const raw = await runCcusage(["blocks", "--active", "--json"], timeoutMs);
@@ -97,6 +97,47 @@ export async function fetchActiveBlock(timeoutMs = 30000): Promise<Window5hBlock
   const active = parsed.blocks.find((b) => b.isActive && !b.isGap);
   if (!active) return null;
   return normalizeBlock(active);
+}
+
+type CacheEntry = {
+  fetchedAt: number; // epoch ms
+  value: Window5hBlock | null;
+};
+
+let cache: CacheEntry | null = null;
+let inFlight: Promise<Window5hBlock | null> | null = null;
+
+/**
+ * TTL 付きキャッシュ + in-flight dedup 版。
+ * watch ループの 30 秒ポーリングで使うことを想定。
+ *
+ * - 直近 ttlMs 以内ならキャッシュを返す
+ * - キャッシュ切れ時の同時呼び出しは 1 つの fetch にまとめる
+ */
+export async function fetchActiveBlockCached(
+  ttlMs: number,
+  timeoutMs = 30000,
+): Promise<Window5hBlock | null> {
+  const now = Date.now();
+  if (cache && now - cache.fetchedAt < ttlMs) {
+    return cache.value;
+  }
+  if (inFlight) return inFlight;
+  inFlight = (async () => {
+    try {
+      const v = await fetchActiveBlock(timeoutMs);
+      cache = { fetchedAt: Date.now(), value: v };
+      return v;
+    } finally {
+      inFlight = null;
+    }
+  })();
+  return inFlight;
+}
+
+/** テスト用 / status コマンドからの強制再取得用 */
+export function invalidateCcusageCache(): void {
+  cache = null;
 }
 
 /**

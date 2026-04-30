@@ -11,7 +11,7 @@
  * SIGINT/SIGTERM でグレースフル終了。
  */
 
-import { fetchActiveBlock, CcusageError } from "./observers/ccusage.ts";
+import { fetchActiveBlockCached, CcusageError } from "./observers/ccusage.ts";
 import { computeWindowStatus, formatStatusLine, type WindowStatus } from "./infer/window5h.ts";
 import { snapshotRecentSessions } from "./observers/claude_code.ts";
 import { detectSnowball, type SnowballState } from "./infer/snowball.ts";
@@ -73,7 +73,8 @@ type TickArgs = {
 };
 
 async function tick({ notifier, fired, config, store }: TickArgs): Promise<void> {
-  const window = await safeFetchWindow();
+  const pollingSec = config.observers.ccusage.pollingSec;
+  const window = await safeFetchWindow(pollingSec);
   const snowball = await safeSnapshotSnowball(config);
   const phaseState = store.getPhase();
   const phase = phaseState?.phase ?? "implement";
@@ -120,9 +121,11 @@ async function tick({ notifier, fired, config, store }: TickArgs): Promise<void>
   console.log(`  -> [${adv.action}] ${adv.rationale}`);
 }
 
-async function safeFetchWindow(): Promise<WindowStatus | null> {
+async function safeFetchWindow(pollingSec: number): Promise<WindowStatus | null> {
+  // キャッシュ TTL は pollingSec の 90% (=ポーリング 1 周期内では再取得しない)
+  const ttlMs = Math.max(5_000, pollingSec * 1000 * 0.9);
   try {
-    const block = await fetchActiveBlock();
+    const block = await fetchActiveBlockCached(ttlMs);
     return block ? computeWindowStatus(block) : null;
   } catch (err) {
     if (err instanceof CcusageError) {
