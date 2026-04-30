@@ -147,11 +147,47 @@ program
 
 program
   .command("phase")
-  .description("フェーズ手動切替: phase set design|implement|review|break（v0.2）")
+  .description("フェーズ手動切替: phase set design|implement|review|break / phase get")
   .argument("<action>", "set | get")
-  .argument("[value]", "design | implement | review | break")
-  .action((_action: string, _value?: string) => {
-    console.log("cogsync phase — not implemented yet (v0.2)");
+  .argument("[value]", "design | implement | review | break (set 時のみ)")
+  .action(async (action: string, value: string | undefined) => {
+    const { JsonStore } = await import("./state/store.ts");
+    const { isPhase, recommendedModelsFor, normalizeStartedAt } = await import("./coach/phase.ts");
+    const store = new JsonStore();
+
+    if (action === "get") {
+      const cur = store.getPhase();
+      if (!cur) {
+        console.log("phase: (未設定)");
+        return;
+      }
+      const elapsedMin = Math.round(
+        (Date.now() - normalizeStartedAt(cur).getTime()) / 60000,
+      );
+      console.log(
+        `phase: ${cur.phase} | 経過 ${elapsedMin} 分 | 推奨モデル: ${
+          recommendedModelsFor(cur.phase).join(", ") || "(なし)"
+        }`,
+      );
+      return;
+    }
+
+    if (action === "set") {
+      if (!value || !isPhase(value)) {
+        console.error("error: phase set <design|implement|review|break>");
+        process.exit(2);
+      }
+      const next = store.setPhase(value);
+      console.log(
+        `phase: ${next.phase} (set at ${normalizeStartedAt(next).toISOString()}) | 推奨モデル: ${
+          recommendedModelsFor(next.phase).join(", ") || "(なし)"
+        }`,
+      );
+      return;
+    }
+
+    console.error(`error: unknown action: ${action}. expected get|set`);
+    process.exit(2);
   });
 
 program

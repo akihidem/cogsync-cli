@@ -1,52 +1,80 @@
 /**
  * state: store
- * better-sqlite3 でローカル永続化。スキーマは docs/DESIGN.md §2.7。
+ *
+ * 最小 JSON 永続化（v0.2）。
+ * 永続パス: ~/.local/state/cogsync/state.json （XDG_STATE_HOME 尊重）
+ *
+ * 将来 SQLite 移行する場合のため、Store インタフェースは v1.0 仕様に近い形で残す。
+ * 現時点では単純な JSON 一式読み書き。
  */
 
-export type SessionRow = {
-  id: string;
-  tool: string;
-  phase: string;
-  startedAt: number;
-  endedAt: number | null;
-  projectId: string | null;
-  parentSessionId: string | null;
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+import type { Phase, PhaseState } from "../coach/phase.ts";
+
+export type PersistedState = {
+  /** スキーマバージョン。今後増やす可能性あり */
+  schema: 1;
+  phase?: PhaseState | null;
 };
 
-export type TokenEventRow = {
-  id?: number;
-  sessionId: string;
-  ts: number;
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheCreate: number;
-  model: string;
-};
+const EMPTY: PersistedState = { schema: 1, phase: null };
 
-export type HandoffRow = {
-  id: string;
-  createdAt: number;
-  fromSessionId: string;
-  toSessionId: string | null;
-  text: string;
-  structured: string; // JSON
-};
-
-export interface Store {
-  init(): Promise<void>;
-
-  upsertSession(s: SessionRow): Promise<void>;
-  insertTokenEvent(e: TokenEventRow): Promise<void>;
-  insertHandoff(h: HandoffRow): Promise<void>;
-
-  recentTokenEvents(sessionId: string, sinceMin: number): Promise<TokenEventRow[]>;
-  todaysSessions(date: string): Promise<SessionRow[]>;
-
-  close(): Promise<void>;
+export function defaultStatePath(): string {
+  const xdg = process.env["XDG_STATE_HOME"];
+  const base = xdg && xdg.length > 0 ? xdg : join(homedir(), ".local", "state");
+  return join(base, "cogsync", "state.json");
 }
 
-export function createStore(_dbPath: string): Store {
-  // TODO v0.1: better-sqlite3 で実装、CREATE TABLE IF NOT EXISTS で初期化
-  throw new Error("createStore not implemented (v0.1)");
+export class JsonStore {
+  constructor(private readonly path: string = defaultStatePath()) {}
+
+  /** ファイルが無ければ作る（空で初期化） */
+  ensure(): void {
+    if (!existsSync(this.path)) {
+      mkdirSync(dirname(this.path), { recursive: true });
+      writeFileSync(this.path, JSON.stringify(EMPTY, null, 2));
+    }
+  }
+
+  read(): PersistedState {
+    this.ensure();
+    const text = readFileSync(this.path, "utf8");
+    try {
+      const data = JSON.parse(text) as PersistedState;
+      if (data.schema !== 1) {
+        throw new Error(`unsupported state schema: ${data.schema}`);
+      }
+      return data;
+    } catch (err) {
+      throw new Error(
+        `failed to parse state file ${this.path}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /** 書き込みは temp file → rename で原子的 */
+  write(state: PersistedState): void {
+    this.ensure();
+    const tmp = `${this.path}.tmp.${process.pid}`;
+    writeFileSync(tmp, JSON.stringify(state, null, 2));
+    renameSync(tmp, this.path);
+  }
+
+  setPhase(phase: Phase, now: Date = new Date()): PhaseState {
+    const state = this.read();
+    const next: PhaseState = { phase, startedAt: now };
+    state.phase = next;
+    this.write(state);
+    return next;
+  }
+
+  getPhase(): PhaseState | null {
+    return this.read().phase ?? null;
+  }
+
+  get path_(): string {
+    return this.path;
+  }
 }

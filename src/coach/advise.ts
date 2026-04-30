@@ -1,39 +1,108 @@
 /**
  * coach: advise
- * フェーズ・残量・スキルプロファイルから推奨アクションを 1 つ選ぶ判断エンジン。
- * 詳細ロジックは cogsync (調査) product/coaching-prompts.md §3.3。
+ *
+ * 推論結果から「いま何をすべきか」を 1 つ選ぶルールベース判定。
+ * 詳細は cogsync 本体 product/coaching-prompts.md §3.3。
  */
 
 import type { Phase } from "./phase.ts";
 import type { WindowStatus } from "../infer/window5h.ts";
+import type { SnowballState } from "../infer/snowball.ts";
 
 export type Advice = {
   action:
     | "continue"
-    | "switch_session"
+    | "create_handoff"
     | "take_break"
     | "switch_model"
-    | "stop_for_today"
-    | "create_handoff";
+    | "stop_for_today";
   rationale: string;
-  confidence: number; // 0..1
-  templateId?: string; // notify テンプレ ID
+  confidence: number;
+  /** notify テンプレ ID（必要時のみ） */
+  templateId?: "snowball_detected" | "limit_approaching" | "burn_exhaustion" | "deepwork_cap_reached";
+  /** notify テンプレに渡す変数 */
+  vars?: Record<string, string | number>;
 };
 
 export type AdviseInput = {
   phase: Phase;
   window: WindowStatus | null;
+  snowball: SnowballState | null;
   deepWorkAccumMin: number;
   parallelCapacity: number;
-  snowballTriggered: boolean;
+  /** 設定: limit 警告閾値 */
+  limitWarnMin: number;
+  /** 設定: ディープワーク日次上限 */
+  dailyDeepWorkCapMin: number;
 };
 
-export function advise(_input: AdviseInput): Advice {
-  // TODO v0.2: ルールベース実装。優先順位:
-  //   1. snowballTriggered  -> create_handoff (templateId: snowball_detected)
-  //   2. minutesRemaining < 15 && phase === "implement" -> create_handoff (limit_approaching)
-  //   3. deepWorkAccumMin >= cap -> stop_for_today
-  //   4. phase === "review" && minutesRemaining < 5 -> switch_session
-  //   5. else -> continue
-  throw new Error("advise not implemented (v0.2)");
+export function advise(input: AdviseInput): Advice {
+  // 優先順位 1: 雪だるま検出（コンテキスト膨張）
+  if (input.snowball?.triggered) {
+    return {
+      action: "create_handoff",
+      rationale: `セッション内コンテキストが ${kf(input.snowball.cumulativeTokens)} に達した（閾値 ${kf(input.snowball.threshold)}）。Lost-in-the-middle のリスクあり。`,
+      confidence: 0.9,
+      templateId: "snowball_detected",
+      vars: {
+        cumulative_kt: Math.round(input.snowball.cumulativeTokens / 1000),
+        threshold_kt: Math.round(input.snowball.threshold / 1000),
+      },
+    };
+  }
+
+  // 優先順位 2: リミット枯渇接近
+  if (input.window && input.window.effectiveRemainingMinutes <= input.limitWarnMin) {
+    if (input.window.remainingReason === "burn_exhaustion") {
+      return {
+        action: "create_handoff",
+        rationale: `現バーンレートだと ${input.window.effectiveRemainingMinutes} 分で枯渇予測（ウィンドウ終了より早い）。`,
+        confidence: 0.85,
+        templateId: "burn_exhaustion",
+        vars: {
+          minutes_to_exhaustion: input.window.effectiveRemainingMinutes,
+          window_end_hhmm: hhmm(input.window.endsAt),
+        },
+      };
+    }
+    return {
+      action: "create_handoff",
+      rationale: `5h ウィンドウ残り ${input.window.effectiveRemainingMinutes} 分。セッションを切ってハンドオフ推奨。`,
+      confidence: 0.85,
+      templateId: "limit_approaching",
+      vars: {
+        remaining_min: input.window.effectiveRemainingMinutes,
+      },
+    };
+  }
+
+  // 優先順位 3: ディープワーク日次上限到達
+  if (input.deepWorkAccumMin >= input.dailyDeepWorkCapMin) {
+    return {
+      action: "stop_for_today",
+      rationale: `今日のディープワーク累積 ${input.deepWorkAccumMin} 分が上限 ${input.dailyDeepWorkCapMin} 分に到達。これ以上は精度が落ちやすい。`,
+      confidence: 0.7,
+      templateId: "deepwork_cap_reached",
+      vars: {
+        accumulated_min: input.deepWorkAccumMin,
+        daily_cap_min: input.dailyDeepWorkCapMin,
+      },
+    };
+  }
+
+  return {
+    action: "continue",
+    rationale: `フェーズ ${input.phase}、リミット余裕あり、雪だるまなし。継続可。`,
+    confidence: 0.5,
+  };
+}
+
+function hhmm(d: Date): string {
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+function kf(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}k`;
+  return String(n);
 }

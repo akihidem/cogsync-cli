@@ -48,6 +48,18 @@ const TEMPLATES: Record<string, (vars: Record<string, string | number>) => Rende
     title: "cogsync watch 開始",
     body: `${v["polling_sec"]} 秒間隔でリミットを観測中。閾値: 残 ${v["limit_warn_min"]} 分で警告。`,
   }),
+  snowball_detected: (v) => ({
+    title: "cogsync — 雪だるま検出",
+    body:
+      `現セッションのコンテキストが ${v["cumulative_kt"]}k token に到達（閾値 ${v["threshold_kt"]}k）。\n` +
+      `Lost-in-the-middle のリスク。新規セッションへ切り出しを推奨。`,
+  }),
+  deepwork_cap_reached: (v) => ({
+    title: "cogsync — ディープワーク上限",
+    body:
+      `今日の集中時間が ${v["accumulated_min"]} 分（上限 ${v["daily_cap_min"]} 分）に到達。\n` +
+      `これ以降は精度が落ちやすい。シャローワークか終了を推奨。`,
+  }),
 };
 
 export interface DesktopNotifier {
