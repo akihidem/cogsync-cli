@@ -1,15 +1,17 @@
 /**
  * notify: desktop
  *
- * node-notifier ラッパ。テンプレ ID + 変数 で通知を発行する。
- * 文言の元は cogsync 本体 (調査) product/coaching-prompts.md §1。
+ * 通知の配送順:
+ *   1. WSL 検出時 → powershell.exe で Windows トースト
+ *   2. node-notifier (libnotify / macOS / Windows ネイティブ)
+ *   3. console.log フォールバック
  *
- * MVP は文言を本ファイル内で短くインライン定義し、テンプレ ID で参照する。
- * 将来は YAML 外部化を検討。
- *
- * 失敗時（WSL で libnotify が無い等）は console.log にフォールバックする。
+ * テンプレ ID + 変数で文言生成。文言の元は cogsync 本体
+ * product/coaching-prompts.md §1。
  */
 
+import { readFileSync } from "node:fs";
+import { spawn } from "node:child_process";
 import notifier from "node-notifier";
 
 export type NotifySeverity = "info" | "nudge" | "warn" | "critical";
@@ -27,10 +29,6 @@ type Rendered = {
   body: string;
 };
 
-/**
- * 通知テンプレ。ニュートラルトーンのみ実装（v0.1）。
- * 残りトーン (librarian/coach/kansai) は v0.3 で追加。
- */
 const TEMPLATES: Record<string, (vars: Record<string, string | number>) => Rendered> = {
   limit_approaching: (v) => ({
     title: "cogsync — リミット接近",
@@ -69,6 +67,7 @@ export interface DesktopNotifier {
 
 export function createDesktopNotifier(_defaultTone: NotifyTone = "neutral"): DesktopNotifier {
   let quiet = false;
+  const wsl = isWsl();
 
   return {
     setQuiet(q: boolean) {
@@ -83,26 +82,22 @@ export function createDesktopNotifier(_defaultTone: NotifyTone = "neutral"): Des
       }
       const rendered = tmpl(req.vars);
       const tag = severityTag(req.severity);
-      try {
-        await new Promise<void>((resolve) => {
-          notifier.notify(
-            {
-              title: rendered.title,
-              message: rendered.body,
-              wait: false,
-            },
-            (err) => {
-              if (err) {
-                // libnotify 不在等。console にフォールバック
-                console.log(`${tag} ${rendered.title}\n  ${rendered.body.replace(/\n/g, "\n  ")}`);
-              }
-              resolve();
-            },
-          );
-        });
-      } catch {
+      const consoleFallback = () =>
         console.log(`${tag} ${rendered.title}\n  ${rendered.body.replace(/\n/g, "\n  ")}`);
+
+      // 1. WSL → powershell.exe toast
+      if (wsl) {
+        const ok = await notifyViaPowerShell(rendered.title, rendered.body);
+        if (ok) return;
+        // fallthrough to node-notifier
       }
+
+      // 2. node-notifier
+      const ok = await notifyViaNodeNotifier(rendered);
+      if (ok) return;
+
+      // 3. console
+      consoleFallback();
     },
   };
 }
@@ -118,4 +113,79 @@ function severityTag(s: NotifySeverity): string {
     case "critical":
       return "[!!]";
   }
+}
+
+function isWsl(): boolean {
+  try {
+    const v = readFileSync("/proc/version", "utf8");
+    return /microsoft/i.test(v);
+  } catch {
+    return false;
+  }
+}
+
+function notifyViaNodeNotifier(rendered: Rendered): Promise<boolean> {
+  return new Promise((resolve) => {
+    try {
+      notifier.notify(
+        { title: rendered.title, message: rendered.body, wait: false },
+        (err) => resolve(!err),
+      );
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
+function escapeXmlText(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/'/g, "&apos;")
+    .replace(/"/g, "&quot;");
+}
+
+/** PowerShell シングルクォート文字列 (`'...'`) のエスケープ。`'` を `''` に */
+function escapePsSingle(s: string): string {
+  return s.replace(/'/g, "''");
+}
+
+function notifyViaPowerShell(title: string, body: string): Promise<boolean> {
+  // \n は &#10; (XML char ref) に変換してトースト本文の改行に
+  const xmlBody = escapeXmlText(body).replace(/\n/g, "&#10;");
+  const xmlTitle = escapeXmlText(title);
+  const xml = `<toast><visual><binding template='ToastGeneric'><text>${xmlTitle}</text><text>${xmlBody}</text></binding></visual></toast>`;
+  const xmlForPs = escapePsSingle(xml);
+
+  const ps =
+    `[Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime]|Out-Null;` +
+    `[Windows.Data.Xml.Dom.XmlDocument,Windows.Data.Xml.Dom,ContentType=WindowsRuntime]|Out-Null;` +
+    `$x=New-Object Windows.Data.Xml.Dom.XmlDocument;` +
+    `$x.LoadXml('${xmlForPs}');` +
+    `$t=[Windows.UI.Notifications.ToastNotification]::new($x);` +
+    `[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('cogsync').Show($t)`;
+
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", ps], {
+        stdio: ["ignore", "ignore", "pipe"],
+      });
+    } catch {
+      resolve(false);
+      return;
+    }
+    let stderr = "";
+    child.stderr?.on("data", (c: Buffer) => {
+      stderr += c.toString("utf8");
+    });
+    child.on("error", () => resolve(false));
+    child.on("close", (code) => {
+      if (code !== 0 && stderr.length > 0) {
+        console.error(`[cogsync] powershell toast failed (${code}): ${stderr.trim().slice(0, 200)}`);
+      }
+      resolve(code === 0);
+    });
+  });
 }
