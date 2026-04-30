@@ -39,15 +39,17 @@
 
 | 層 | 採用 | 理由 |
 | --- | --- | --- |
-| ランタイム | Bun 1.2+ | TypeScript を tsc 介さず即実行、CLI 配布が単一バイナリ化可能 |
+| ランタイム | Node.js 20+ | 既存環境で即動く。Bun への移行は v0.2 以降の検討事項 |
+| TS 実行 | tsx 4 | 開発時は `npx tsx src/index.ts` で起動、ビルド不要 |
 | 言語 | TypeScript（厳格モード） | ccusage / MCP SDK との親和性 |
-| ストレージ | better-sqlite3 | 同期 API、依存少、組み込み |
-| ファイル監視 | chokidar | クロスプラットフォーム |
-| 通知 | node-notifier | macOS / Linux / Windows |
+| ストレージ | better-sqlite3 | 同期 API、依存少、組み込み（v0.2 で導入） |
+| ファイル監視 | chokidar | クロスプラットフォーム（v0.2 で導入） |
+| 通知 | node-notifier | macOS / Linux / Windows（v0.1 で導入） |
 | 設定 | YAML（`js-yaml`） | 編集容易、コメント可 |
 | MCP（v1.0） | `@modelcontextprotocol/sdk` | 公式 |
 
 → MVP は **CLI のみ・GUI なし**。GUI（Tauri）は MVP の有用性が確認できた v0.2 以降。
+→ v0.1 は ccusage 子プロセス呼び出しのため、依存は最小（commander + js-yaml）。SQLite / 通知 / 監視は機能を追加する v0.2 以降に依存追加する。
 
 ## ディレクトリ構成
 
@@ -83,16 +85,27 @@ cogsync-cli/
 └── tests/                # 後で
 ```
 
-## 起動コマンド（予定）
+## 起動コマンド
 
 ```bash
-bun install
-bun run src/index.ts watch       # 常駐モード：観測＋通知
-bun run src/index.ts status      # 現在の状態をワンショット表示
-bun run src/index.ts handoff     # ハンドオフ・プロンプトを生成して標準出力＋クリップボード
-bun run src/index.ts phase set design   # フェーズ手動切替
-bun run src/index.ts pomodoro start     # 適応的ポモドーロ開始
+npm install                                        # 依存インストール
+npm run status                                     # 現在の 5h ウィンドウ残量を 1 行表示（v0.1 実装済み）
+npm run status -- --json                           # JSON 出力（プログラム消費用）
+npm run watch                                      # 常駐モード（v0.1.x 実装予定）
+npx tsx src/index.ts handoff                       # ハンドオフ・プロンプト生成（v0.2）
+npx tsx src/index.ts phase set design              # フェーズ手動切替（v0.2）
+npx tsx src/index.ts pomodoro start                # 適応的ポモドーロ開始（v0.3）
 ```
+
+### 実出力例
+
+```text
+$ npm run status
+Claude 5h ウィンドウ | 残り 4h16m | (終了 17:00) | 累計 2.81M | 8,636 tok/min
+```
+
+`残り` は **5h ウィンドウ終了時刻** と **現バーンレート想定の枯渇予測時刻** の早い方を採用。
+枯渇予測が先に来た場合は `(枯渇予測 HH:MM - 現バーンレート想定)` と表示される。
 
 ## ライセンス
 
@@ -100,4 +113,4 @@ MIT を予定（v1.0 公開時に確定）。
 
 ## ステータス
 
-**v0.0 スケルトン**：責務とインターフェースだけ定義。実装はこれから。
+**v0.1.0-alpha.0**：`cogsync status` が動作（ccusage 子プロセス呼び出しで 5h ウィンドウ残量を 1 行表示）。`watch` / `handoff` / `phase` / `pomodoro` は未実装。

@@ -5,7 +5,7 @@
  */
 
 import type { Phase } from "./phase.ts";
-import type { Window5hSnapshot } from "../observers/ccusage.ts";
+import type { WindowStatus } from "../infer/window5h.ts";
 
 export type Advice = {
   action:
@@ -22,8 +22,7 @@ export type Advice = {
 
 export type AdviseInput = {
   phase: Phase;
-  window: Window5hSnapshot | null;
-  minutesRemaining: number | null;
+  window: WindowStatus | null;
   deepWorkAccumMin: number;
   parallelCapacity: number;
   snowballTriggered: boolean;
