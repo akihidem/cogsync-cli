@@ -23,15 +23,18 @@
 
 | ID | 機能 | 状態 |
 | --- | --- | --- |
-| OB-1 | ccusage から 5h ブロック取得 | ✅ 実装済 (子プロセス呼出) |
-| OB-2 | 5h ウィンドウ残量と終了時刻予測 | ✅ 実装済 |
-| IN-2 | 雪だるま効果検出 | 未着手 (v0.2) |
-| IN-3 | リミット枯渇までの予測 | ✅ 実装済 (ccusage projection 委譲) |
-| CO-3 | フェーズ移行時のハンドオフ・プロンプト生成 | ✅ テンプレのみ実装 |
-| CO-4 | リミット接近通知 | ✅ 実装済 (watch + node-notifier) |
-| CO-5 | AI 処理中のディープ・ブレイク提案 | 未着手 (v0.2) |
+| OB-1 | ccusage から 5h ブロック取得 | ✅ 子プロセス呼出 + TTL キャッシュ |
+| OB-2 | 5h ウィンドウ残量と終了時刻予測 | ✅ |
+| IN-2 | 雪だるま効果検出 | ✅ raw JSONL 走査、デフォ閾値 150k (バックテスト調整済) |
+| IN-3 | リミット枯渇までの予測 | ✅ ccusage projection 委譲 |
+| IN-4 | スキル熟度推定 | 未着手 (v0.3) |
+| IN-5 | ディープワーク累積追跡 | 未着手 (v0.3) |
+| CO-1 | フェーズ別モデル提案 | ✅ phase set/get、recommendedModelsFor |
+| CO-3 | フェーズ移行時のハンドオフ・プロンプト生成 | ✅ |
+| CO-4 | リミット接近通知 | ✅ watch + WSL→PowerShell トースト |
+| CO-5 | AI 処理中のディープ・ブレイク提案 | 未着手 (v0.3) |
 | TI-1 | 適応的ポモドーロ（AI 処理時間で動的伸縮） | 未着手 (v0.3) |
-| HO-1 | ハンドオフ・プロンプトのテンプレ提供 | ✅ 実装済 (`cogsync handoff`) |
+| HO-1 | ハンドオフ・プロンプトのテンプレ提供 | ✅ |
 
 `docs/DESIGN.md` に内部設計、`src/` に責務スケルトンを配置済み。
 
@@ -155,4 +158,4 @@ MIT を予定（v1.0 公開時に確定）。
 
 ## ステータス
 
-**v0.1.0-alpha.1**：`status` / `watch` / `config` / `handoff` の MVP コマンド一式が動作。`phase` / `pomodoro` は v0.2/v0.3。
+**v0.2.0-alpha.0**：`status` / `watch` / `config` / `handoff` / `phase` の MVP〜 が一通り動作。watch は ccusage 5h ブロック観測 + raw JSONL 雪だるま検出 + advise + WSL→PowerShell トースト + TTL キャッシュ統合済み。`pomodoro` / スキル熟度推定 / ディープワーク追跡 / ブレイク提案は v0.3。

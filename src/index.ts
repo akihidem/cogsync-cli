@@ -21,7 +21,7 @@ const program = new Command();
 program
   .name("cogsync")
   .description("AI のリミット回復サイクルと人間の集中サイクルを同期させる CLI コーチ")
-  .version("0.1.0-alpha.1")
+  .version("0.2.0-alpha.0")
   .option("--config <path>", "設定ファイルパス（既定 ~/.config/cogsync/config.yaml、env COGSYNC_CONFIG でも上書き）");
 
 program
