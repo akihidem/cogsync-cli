@@ -46,7 +46,11 @@ export const DEFAULT_CONFIG: CogsyncConfig = {
     claudeCode: { enabled: true, logDir: "~/.claude/projects" },
   },
   thresholds: {
-    snowballToken: 80000,
+    // バックテスト (scripts/backtest-snowball.ts) で 373 セッションの分布を確認:
+    //   p50=7k / p75=28k / p90=131k / p95=533k / p99=7M
+    // 80k だと 20% のセッションが triggered で多すぎる。
+    // 150k (≈ p90 強) で 約 12% に絞り、本当に Lost-in-the-middle 圏のものを通知。
+    snowballToken: 150_000,
     limitWarnMin: 15,
   },
   notify: {
