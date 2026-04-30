@@ -64,10 +64,19 @@ program
 
 program
   .command("watch")
-  .description("常駐モード。観測＋推論＋必要時の通知（v0.1 実装中）")
-  .action(() => {
-    // TODO v0.1.x: setInterval で fetchActiveBlock をポーリング、閾値で通知発火
-    console.log("cogsync watch — not implemented yet (v0.1.x)");
+  .description("常駐モード。ポーリングでリミットを観測し、閾値超えで通知")
+  .option("--polling-sec <n>", "ポーリング間隔(秒)。設定値を上書き")
+  .option("--once", "1 回だけ実行して終了（動作確認用）")
+  .action(async (opts: { pollingSec?: string; once?: boolean }) => {
+    const cliOpts = program.opts<{ config?: string }>();
+    const { loadConfig } = await import("./config.ts");
+    const { runWatch } = await import("./watch.ts");
+    const { config } = loadConfig({ override: cliOpts.config });
+    await runWatch({
+      config,
+      pollingSecOverride: opts.pollingSec ? Number(opts.pollingSec) : undefined,
+      once: opts.once,
+    });
   });
 
 program
