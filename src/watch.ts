@@ -18,9 +18,8 @@
 import { fetchActiveBlockCached, CcusageError } from "./observers/ccusage.ts";
 import { computeWindowStatus, formatStatusLine, type WindowStatus } from "./infer/window5h.ts";
 import {
-  snapshotRecentSessions,
+  findActiveSession,
   readSessionSamples,
-  readLastEventTimestamps,
   type SessionFile,
 } from "./observers/claude_code.ts";
 import { detectSnowball, type SnowballState } from "./infer/snowball.ts";
@@ -28,6 +27,7 @@ import { classifyWorkState, DeepWorkAccumulator, type WorkState } from "./infer/
 import { advise, type Advice } from "./coach/advise.ts";
 import { createDesktopNotifier, type NotifyRequest } from "./notify/desktop.ts";
 import { JsonStore } from "./state/store.ts";
+import { isPhaseStale } from "./coach/phase.ts";
 import type { CogsyncConfig } from "./config.ts";
 
 type FiredKey = string;
@@ -46,6 +46,11 @@ export async function runWatch(opts: WatchOptions): Promise<void> {
   const accum = new DeepWorkAccumulator();
   accum.loadFromJSON(store.loadDeepWork());
   const fired = new Set<FiredKey>();
+  /**
+   * テンプレート ID 単位のグローバル cooldown。session pivot で fired キーが別物に
+   * 化けても、同じ templateId は cooldown 期間内に再通知しない。
+   */
+  const lastFiredAtByTemplate = new Map<string, number>();
   let aiBusySince: Date | null = null;
   let lastSavedAt = 0;
 
@@ -66,7 +71,7 @@ export async function runWatch(opts: WatchOptions): Promise<void> {
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
 
-  const ctx = { notifier, fired, config, store, accum };
+  const ctx = { notifier, fired, lastFiredAtByTemplate, config, store, accum };
   const result = await tick(ctx, aiBusySince);
   aiBusySince = result.aiBusySince;
   if (opts.once) {
@@ -95,13 +100,14 @@ export async function runWatch(opts: WatchOptions): Promise<void> {
 type Ctx = {
   notifier: ReturnType<typeof createDesktopNotifier>;
   fired: Set<FiredKey>;
+  lastFiredAtByTemplate: Map<string, number>;
   config: CogsyncConfig;
   store: JsonStore;
   accum: DeepWorkAccumulator;
 };
 
 async function tick(ctx: Ctx, aiBusySince: Date | null): Promise<{ aiBusySince: Date | null }> {
-  const { config, store, accum, fired, notifier } = ctx;
+  const { config, store, accum, fired, lastFiredAtByTemplate, notifier } = ctx;
   const pollingSec = config.observers.ccusage.pollingSec;
 
   const window = await safeFetchWindow(pollingSec);
@@ -132,7 +138,9 @@ async function tick(ctx: Ctx, aiBusySince: Date | null): Promise<{ aiBusySince: 
   const deepWorkMin = accum.todayMin(now);
 
   const phaseState = store.getPhase();
-  const phase = phaseState?.phase ?? "implement";
+  const phaseExpired =
+    phaseState != null && isPhaseStale(phaseState, config.thresholds.phaseStaleHours, now);
+  const phase = phaseState && !phaseExpired ? phaseState.phase : "implement";
 
   // status 行
   const statusBits: string[] = [`[${nowHHMMSS()}]`];
@@ -146,7 +154,7 @@ async function tick(ctx: Ctx, aiBusySince: Date | null): Promise<{ aiBusySince: 
   }
   statusBits.push(`| ws=${ws.state}` + (aiBusyDurationMin > 0 ? `(${aiBusyDurationMin.toFixed(1)}m)` : ""));
   statusBits.push(`| dw=${deepWorkMin}m`);
-  statusBits.push(`| phase=${phase}`);
+  statusBits.push(`| phase=${phase}${phaseExpired ? "(stale→default)" : ""}`);
   console.log(statusBits.join(" "));
 
   const adv: Advice = advise({
@@ -169,7 +177,18 @@ async function tick(ctx: Ctx, aiBusySince: Date | null): Promise<{ aiBusySince: 
   const dedupBase = pickDedupKey(adv, sessionInfo, window);
   const key: FiredKey = `${dedupBase}:${adv.templateId}`;
   if (fired.has(key)) return { aiBusySince: nextAiBusySince };
+
+  // グローバル cooldown: dedupBase が pivot しても、同じ templateId は cooldown 内なら抑制
+  const cooldownMs = config.thresholds.notifyCooldownMin * 60_000;
+  if (cooldownMs > 0) {
+    const lastAt = lastFiredAtByTemplate.get(adv.templateId);
+    if (lastAt != null && now.getTime() - lastAt < cooldownMs) {
+      return { aiBusySince: nextAiBusySince };
+    }
+  }
+
   fired.add(key);
+  lastFiredAtByTemplate.set(adv.templateId, now.getTime());
 
   const req: NotifyRequest = {
     template: adv.templateId,
@@ -217,11 +236,10 @@ function safeReadLatestSession(config: CogsyncConfig): {
 } | null {
   if (!config.observers.claudeCode.enabled) return null;
   try {
-    const snap = snapshotRecentSessions(config.observers.claudeCode.logDir, 1);
-    const top = snap[0];
-    if (!top) return null;
-    const ts = readLastEventTimestamps(top.file);
-    return { file: top.file, lastUserAt: ts.lastUserAt, lastAssistantAt: ts.lastAssistantAt };
+    return findActiveSession(
+      config.observers.claudeCode.logDir,
+      config.thresholds.activeSessionWindowMin,
+    );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[cogsync] safeReadLatestSession: ${msg}`);

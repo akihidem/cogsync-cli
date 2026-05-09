@@ -148,6 +148,42 @@ export function snapshotRecentSessions(
 }
 
 /**
+ * 「アクティブな」セッションを 1 件返す。
+ *
+ * 単純な mtime 降順 1 位だと、過去ログのちょっとした更新（subagent や別ホスト）で
+ * top が pivot し、cumulative tokens が tick ごとに乱変動する問題があった。
+ * 「最新の user/assistant イベントが直近 recentMin 分以内」のフィルタで真にアクティブな
+ * セッションだけを採用する。
+ *
+ * @param recentMin   このウィンドウ内の最新イベントを持つセッションのみ採用
+ * @param candidateLimit  mtime 降順で上から確認する候補数
+ */
+export function findActiveSession(
+  logDir: string,
+  recentMin = 5,
+  candidateLimit = 5,
+  now: Date = new Date(),
+): {
+  file: SessionFile;
+  lastUserAt: Date | null;
+  lastAssistantAt: Date | null;
+} | null {
+  const cutoffMs = now.getTime() - recentMin * 60_000;
+  const files = listSessionFiles(logDir).slice(0, candidateLimit);
+  for (const f of files) {
+    const ts = readLastEventTimestamps(f);
+    const newestMs = Math.max(
+      ts.lastUserAt?.getTime() ?? 0,
+      ts.lastAssistantAt?.getTime() ?? 0,
+    );
+    if (newestMs >= cutoffMs) {
+      return { file: f, lastUserAt: ts.lastUserAt, lastAssistantAt: ts.lastAssistantAt };
+    }
+  }
+  return null;
+}
+
+/**
  * セッションファイルから最新の user / assistant タイムスタンプを取り出す。
  * AI 処理状態判定 (work_state) に使う。
  *

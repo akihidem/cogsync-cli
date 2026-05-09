@@ -24,6 +24,20 @@ export function normalizeStartedAt(s: PhaseState): Date {
 }
 
 /**
+ * phase set から staleHours 時間以上経過していたら true。
+ * 古い phase（例: 前日設定したまま）を引きずらないため、表示や指南で未設定扱いにする。
+ */
+export function isPhaseStale(
+  s: PhaseState,
+  staleHours: number,
+  now: Date = new Date(),
+): boolean {
+  if (staleHours <= 0) return false;
+  const startedMs = normalizeStartedAt(s).getTime();
+  return now.getTime() - startedMs > staleHours * 3_600_000;
+}
+
+/**
  * フェーズ別の推奨モデル（cogsync 本体 product/coaching-prompts.md / requirements.md CO-1 準拠）
  */
 export function recommendedModelsFor(phase: Phase): string[] {

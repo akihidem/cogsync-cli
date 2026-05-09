@@ -29,6 +29,12 @@ export type CogsyncConfig = {
     snowballToken: number;
     limitWarnMin: number;
     aiWaitBreakMin: number;
+    /** アクティブ判定: 最新の user/assistant が直近 N 分以内ならアクティブ（top session 揺らぎ抑制） */
+    activeSessionWindowMin: number;
+    /** 通知のグローバル cooldown: 同 templateId は N 分以内に再通知しない（spam 抑制） */
+    notifyCooldownMin: number;
+    /** phase 自動失効: phase set から N 時間経過したら未設定扱い（古い phase を引きずらない） */
+    phaseStaleHours: number;
   };
   notify: {
     tone: "neutral" | "librarian" | "coach" | "kansai";
@@ -55,6 +61,9 @@ export const DEFAULT_CONFIG: CogsyncConfig = {
     limitWarnMin: 15,
     /** ai_busy がこの分以上続いたらブレイク提案（CO-5） */
     aiWaitBreakMin: 5,
+    activeSessionWindowMin: 5,
+    notifyCooldownMin: 15,
+    phaseStaleHours: 6,
   },
   notify: {
     tone: "neutral",

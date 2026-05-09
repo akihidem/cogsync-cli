@@ -12,14 +12,10 @@
  */
 
 import { fileURLToPath } from "node:url";
-import {
-  snapshotRecentSessions,
-  readLastEventTimestamps,
-  type SessionFile,
-} from "../observers/claude_code.ts";
+import { findActiveSession } from "../observers/claude_code.ts";
 import { classifyWorkState } from "../infer/work_state.ts";
 import { createDesktopNotifier, type DesktopNotifier } from "../notify/desktop.ts";
-import { loadConfig } from "../config.ts";
+import { loadConfig, type CogsyncConfig } from "../config.ts";
 
 export type PomodoroOptions = {
   focusMin?: number;
@@ -55,7 +51,7 @@ export async function runAdaptivePomodoro(opts: PomodoroOptions = {}): Promise<v
   let cycle = 0;
   while (!stopped && (cycles === 0 || cycle < cycles)) {
     cycle += 1;
-    await runFocus(notifier, focusMin, earlyBreakMin, config.observers.claudeCode.logDir, () => stopped, cycle);
+    await runFocus(notifier, focusMin, earlyBreakMin, config, () => stopped, cycle);
     if (stopped) break;
     await runBreak(notifier, breakMin, () => stopped, cycle);
   }
@@ -66,7 +62,7 @@ async function runFocus(
   notifier: DesktopNotifier,
   focusMin: number,
   earlyBreakMin: number,
-  logDir: string,
+  config: CogsyncConfig,
   isStopped: () => boolean,
   cycle: number,
 ): Promise<void> {
@@ -87,7 +83,10 @@ async function runFocus(
     if (now >= endsAt) return;
 
     if (earlyBreakMin > 0) {
-      const aiBusyMin = checkAiBusyDurationMin(logDir);
+      const aiBusyMin = checkAiBusyDurationMin(
+        config.observers.claudeCode.logDir,
+        config.thresholds.activeSessionWindowMin,
+      );
       if (aiBusyMin >= earlyBreakMin) {
         console.log(
           `[pomodoro #${cycle}] AI 処理待ち ${aiBusyMin.toFixed(1)} 分検出 → ブレイクへ前倒し`,
@@ -133,18 +132,16 @@ async function runBreak(
 }
 
 /**
- * 最新セッションでの ai_busy 継続分。
- * ai_busy でない場合は 0。
+ * 真にアクティブなセッションでの ai_busy 継続分。
+ * ai_busy でない、またはアクティブセッションが無い場合は 0。
  */
-function checkAiBusyDurationMin(logDir: string): number {
+function checkAiBusyDurationMin(logDir: string, recentMin: number): number {
   try {
-    const snap = snapshotRecentSessions(logDir, 1);
-    const top = snap[0];
-    if (!top) return 0;
-    const ts = readLastEventTimestamps(top.file);
-    const ws = classifyWorkState(ts.lastUserAt, ts.lastAssistantAt, new Date());
-    if (ws.state !== "ai_busy" || !ts.lastUserAt) return 0;
-    return (Date.now() - ts.lastUserAt.getTime()) / 60000;
+    const active = findActiveSession(logDir, recentMin);
+    if (!active) return 0;
+    const ws = classifyWorkState(active.lastUserAt, active.lastAssistantAt, new Date());
+    if (ws.state !== "ai_busy" || !active.lastUserAt) return 0;
+    return (Date.now() - active.lastUserAt.getTime()) / 60000;
   } catch {
     return 0;
   }
@@ -170,5 +167,3 @@ function hhmm(d: Date): string {
 
 // fileURLToPath は ESM 内のスクリプト直接実行検出を将来使う用。今は未使用。
 void fileURLToPath;
-// SessionFile も将来の拡張用にインポート参照を残す
-void (null as SessionFile | null);

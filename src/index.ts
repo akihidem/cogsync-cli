@@ -209,8 +209,12 @@ program
   .argument("[value]", "design | implement | review | break (set 時のみ)")
   .action(async (action: string, value: string | undefined) => {
     const { JsonStore } = await import("./state/store.ts");
-    const { isPhase, recommendedModelsFor, normalizeStartedAt } = await import("./coach/phase.ts");
+    const { isPhase, recommendedModelsFor, normalizeStartedAt, isPhaseStale } = await import(
+      "./coach/phase.ts"
+    );
+    const { loadConfig } = await import("./config.ts");
     const store = new JsonStore();
+    const { config } = loadConfig();
 
     if (action === "get") {
       const cur = store.getPhase();
@@ -221,10 +225,14 @@ program
       const elapsedMin = Math.round(
         (Date.now() - normalizeStartedAt(cur).getTime()) / 60000,
       );
+      const stale = isPhaseStale(cur, config.thresholds.phaseStaleHours);
+      const staleSuffix = stale
+        ? ` | ⚠️ ${config.thresholds.phaseStaleHours}h 以上経過 (stale)`
+        : "";
       console.log(
         `phase: ${cur.phase} | 経過 ${elapsedMin} 分 | 推奨モデル: ${
           recommendedModelsFor(cur.phase).join(", ") || "(なし)"
-        }`,
+        }${staleSuffix}`,
       );
       return;
     }
