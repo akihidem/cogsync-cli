@@ -1,12 +1,14 @@
 /**
- * MCP server: cogsync の状態を読み取り専用 Resources として公開する。
+ * MCP server: cogsync の状態を Resources / Tools / Prompts として公開する。
  *
  * stdio transport で起動。Claude Code 等の MCP クライアントは
  * `~/.config/claude/mcp.json` (or `.mcp.json`) で `command: "npx", args: ["tsx", "..."]`
  * のように登録する。
  *
  * spec §6.1 のとおり「ローカル限定 / リモート公開しない」を満たすため、stdio 限定。
- * Tools/Prompts は v1.1 以降。本実装は Resources のみ（読み取り専用、副作用なし）。
+ *
+ * v0.5: Resources のみ（読み取り専用）
+ * v1.0: Tools（set_phase, get_recommended_action, create_handoff）+ Prompts 4 種を追加
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -20,9 +22,11 @@ import {
   readPhaseResource,
   type ResourceContext,
 } from "./resources.ts";
+import { registerTools } from "./tools.ts";
+import { registerPrompts } from "./prompts.ts";
 
 const PKG_NAME = "cogsync-cli";
-const PKG_VERSION = "0.5.0-alpha.0";
+const PKG_VERSION = "1.0.0-alpha.0";
 
 export async function runMcpServer(): Promise<void> {
   const { config } = loadConfig();
@@ -32,9 +36,9 @@ export async function runMcpServer(): Promise<void> {
   const server = new McpServer(
     { name: PKG_NAME, version: PKG_VERSION },
     {
-      capabilities: { resources: {} },
+      capabilities: { resources: {}, tools: {}, prompts: {} },
       instructions:
-        "cogsync の現在の作業状態（フェーズ・5h リミット・ディープワーク累積・アクティブセッション）を読み取り専用で公開する MCP サーバ。タスク開始前や手詰まり時に状態を問い合わせて、人間への介入頻度を下げる用途を想定。",
+        "cogsync の作業状態（フェーズ・5h リミット・ディープワーク累積・アクティブセッション）の読み取りと、フェーズ切替・推奨アクション取得・ハンドオフ生成を提供する MCP サーバ。タスク開始前や手詰まり時に状態を問い合わせ、セッション内でフェーズを切り替えることで人間への介入頻度を下げる。",
     },
   );
 
@@ -85,6 +89,9 @@ export async function runMcpServer(): Promise<void> {
     },
     (uri) => jsonResource(uri, readActiveSessionResource(ctx)),
   );
+
+  registerTools(server, ctx);
+  registerPrompts(server);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
