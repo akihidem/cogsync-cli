@@ -23,7 +23,12 @@ import {
   type SessionFile,
 } from "./observers/claude_code.ts";
 import { detectSnowball, type SnowballState } from "./infer/snowball.ts";
-import { classifyWorkState, DeepWorkAccumulator, type WorkState } from "./infer/work_state.ts";
+import {
+  classifyWorkState,
+  DeepWorkAccumulator,
+  type PermissionBucket,
+  type WorkState,
+} from "./infer/work_state.ts";
 import { advise, type Advice } from "./coach/advise.ts";
 import { createDesktopNotifier, type NotifyRequest } from "./notify/desktop.ts";
 import { JsonStore } from "./state/store.ts";
@@ -121,6 +126,7 @@ async function tick(ctx: Ctx, aiBusySince: Date | null): Promise<{ aiBusySince: 
   const ws = sessionInfo
     ? classifyWorkState(sessionInfo.lastUserAt, sessionInfo.lastAssistantAt, now)
     : { state: "idle" as WorkState, lastUserAt: null, lastAssistantAt: null, reason: "no session" };
+  const bucket: PermissionBucket = sessionInfo?.currentPermissionMode ?? "manual";
 
   // ai_busy 起算時刻の更新
   let nextAiBusySince: Date | null;
@@ -133,9 +139,10 @@ async function tick(ctx: Ctx, aiBusySince: Date | null): Promise<{ aiBusySince: 
     ? Math.max(0, (now.getTime() - nextAiBusySince.getTime()) / 60000)
     : 0;
 
-  // ディープワーク累積
-  accum.feed(ws.state, now);
-  const deepWorkMin = accum.todayMin(now);
+  // ディープワーク累積（permissionMode バケット別に分配）
+  accum.feed(ws.state, now, bucket);
+  const dwBreakdown = accum.todayBreakdown(now);
+  const deepWorkMin = dwBreakdown.total;
 
   const phaseState = store.getPhase();
   const phaseExpired =
@@ -153,7 +160,10 @@ async function tick(ctx: Ctx, aiBusySince: Date | null): Promise<{ aiBusySince: 
     );
   }
   statusBits.push(`| ws=${ws.state}` + (aiBusyDurationMin > 0 ? `(${aiBusyDurationMin.toFixed(1)}m)` : ""));
-  statusBits.push(`| dw=${deepWorkMin}m`);
+  statusBits.push(
+    `| dw=${deepWorkMin}m(M:${dwBreakdown.manual}/A:${dwBreakdown.auto}/B:${dwBreakdown.bypass})`,
+  );
+  statusBits.push(`| mode=${bucket}`);
   statusBits.push(`| phase=${phase}${phaseExpired ? "(stale→default)" : ""}`);
   console.log(statusBits.join(" "));
 
@@ -164,6 +174,7 @@ async function tick(ctx: Ctx, aiBusySince: Date | null): Promise<{ aiBusySince: 
     workState: ws.state,
     aiBusyDurationMin: Math.round(aiBusyDurationMin * 10) / 10,
     deepWorkAccumMin: deepWorkMin,
+    deepWorkManualMin: dwBreakdown.manual,
     parallelCapacity: config.profile.parallelCapacity,
     limitWarnMin: config.thresholds.limitWarnMin,
     dailyDeepWorkCapMin: config.profile.dailyDeepWorkCapMin,
@@ -233,6 +244,7 @@ function safeReadLatestSession(config: CogsyncConfig): {
   file: SessionFile;
   lastUserAt: Date | null;
   lastAssistantAt: Date | null;
+  currentPermissionMode: PermissionBucket;
 } | null {
   if (!config.observers.claudeCode.enabled) return null;
   try {

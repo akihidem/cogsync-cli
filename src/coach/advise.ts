@@ -37,7 +37,14 @@ export type AdviseInput = {
   workState: WorkState;
   /** ai_busy が継続している分数（active/idle 時は 0） */
   aiBusyDurationMin: number;
+  /** 当日のディープワーク総分（manual + auto + bypass）。表示用。 */
   deepWorkAccumMin: number;
+  /**
+   * 当日の manual バケット分。permissionMode=default 下での累積。
+   * 「人間が判断していた時間」の近似で、cap 判定はこちらを使う。
+   * 未指定なら deepWorkAccumMin にフォールバック（後方互換）。
+   */
+  deepWorkManualMin?: number;
   parallelCapacity: number;
   /** 設定: limit 警告閾値 */
   limitWarnMin: number;
@@ -88,14 +95,18 @@ export function advise(input: AdviseInput): Advice {
   }
 
   // 優先順位 3: ディープワーク日次上限到達
-  if (input.deepWorkAccumMin >= input.dailyDeepWorkCapMin) {
+  // cap 判定は manual バケットのみで行う（auto/bypass は AI に丸投げの時間なので
+  // 認知負荷が低い前提）。manual が未指定なら従来通り total を使う。
+  const capMin = input.deepWorkManualMin ?? input.deepWorkAccumMin;
+  if (capMin >= input.dailyDeepWorkCapMin) {
     return {
       action: "stop_for_today",
-      rationale: `今日のディープワーク累積 ${input.deepWorkAccumMin} 分が上限 ${input.dailyDeepWorkCapMin} 分に到達。これ以上は精度が落ちやすい。`,
+      rationale: `今日の判断系ディープワーク ${capMin} 分が上限 ${input.dailyDeepWorkCapMin} 分に到達。これ以上は精度が落ちやすい。`,
       confidence: 0.7,
       templateId: "deepwork_cap_reached",
       vars: {
-        accumulated_min: input.deepWorkAccumMin,
+        accumulated_min: capMin,
+        total_min: input.deepWorkAccumMin,
         daily_cap_min: input.dailyDeepWorkCapMin,
       },
     };

@@ -72,7 +72,7 @@ export async function runMcpServer(): Promise<void> {
     {
       title: "今日のディープワーク累積",
       description:
-        "watch コマンド経由で永続化された deepWork.byDate から今日の合計分と履歴を返す。watch を起動していない期間はカウントされない。",
+        "watch コマンド経由で永続化された deepWork.byDate から今日の合計分と履歴を返す。permissionMode 別に manual/auto/bypass バケットの内訳も同梱。watch を起動していない期間はカウントされない。",
       mimeType: "application/json",
     },
     (uri) => jsonResource(uri, readDeepWorkResource(ctx)),
