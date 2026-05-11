@@ -289,4 +289,15 @@ program
     await runMcpServer();
   });
 
-program.parseAsync(process.argv);
+program.parseAsync(process.argv).catch((err) => {
+  // 想定外の例外は必ず stderr に出して非ゼロ終了する。
+  // MCP サーバ (mcp サブコマンド) のように Promise を返したまま終わる
+  // ハンドラで例外が起きた時、無音で落ちないようにする。
+  const line = JSON.stringify({
+    ts: new Date().toISOString(),
+    stage: "fatal",
+    error: err instanceof Error ? { message: err.message, stack: err.stack } : err,
+  });
+  process.stderr.write(line + "\n");
+  process.exit(1);
+});
