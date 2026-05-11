@@ -148,12 +148,23 @@ async function buildAdviseInput(ctx: ResourceContext): Promise<AdviseInput> {
     phaseState != null && isPhaseStale(phaseState, config.thresholds.phaseStaleHours, now);
   const phase: Phase = phaseState && !phaseExpired ? phaseState.phase : "implement";
 
-  // 5. ディープワーク累積
+  // 5. ディープワーク累積（バケット別）
   const dwRaw = store.loadDeepWork();
   const todayKey = ymd(now);
-  const deepWorkAccumMin = dwRaw?.byDate?.[todayKey]
-    ? Math.round(dwRaw.byDate[todayKey] / 60000)
-    : 0;
+  const buckets = dwRaw?.byDateBuckets?.[todayKey];
+  let manualMs = 0;
+  let totalMs = 0;
+  if (buckets) {
+    manualMs = buckets.manual ?? 0;
+    totalMs = (buckets.manual ?? 0) + (buckets.auto ?? 0) + (buckets.bypass ?? 0);
+  } else {
+    // 旧データのみ: byDate (number) を manual に寄せる
+    const legacy = dwRaw?.byDate?.[todayKey] ?? 0;
+    manualMs = legacy;
+    totalMs = legacy;
+  }
+  const deepWorkAccumMin = Math.round(totalMs / 60000);
+  const deepWorkManualMin = Math.round(manualMs / 60000);
 
   return {
     phase,
@@ -162,6 +173,7 @@ async function buildAdviseInput(ctx: ResourceContext): Promise<AdviseInput> {
     workState: ws.state,
     aiBusyDurationMin: Math.round(aiBusyDurationMin * 10) / 10,
     deepWorkAccumMin,
+    deepWorkManualMin,
     parallelCapacity: config.profile.parallelCapacity,
     limitWarnMin: config.thresholds.limitWarnMin,
     dailyDeepWorkCapMin: config.profile.dailyDeepWorkCapMin,

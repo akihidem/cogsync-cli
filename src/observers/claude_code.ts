@@ -53,7 +53,16 @@ type AssistantUsage = {
 type AnyRecord = {
   type?: string;
   timestamp?: string;
+  permissionMode?: string;
 };
+
+/** Claude Code が JSONL に書く permissionMode を 3 バケットへ正規化する。 */
+export type PermissionMode = "manual" | "auto" | "bypass";
+export function normalizePermissionMode(raw: string | undefined | null): PermissionMode {
+  if (raw === "bypassPermissions") return "bypass";
+  if (raw === "auto" || raw === "acceptEdits" || raw === "plan") return "auto";
+  return "manual";
+}
 
 /**
  * ログディレクトリ配下の全 JSONL ファイルを列挙する。
@@ -167,6 +176,7 @@ export function findActiveSession(
   file: SessionFile;
   lastUserAt: Date | null;
   lastAssistantAt: Date | null;
+  currentPermissionMode: PermissionMode;
 } | null {
   const cutoffMs = now.getTime() - recentMin * 60_000;
   const files = listSessionFiles(logDir).slice(0, candidateLimit);
@@ -177,7 +187,12 @@ export function findActiveSession(
       ts.lastAssistantAt?.getTime() ?? 0,
     );
     if (newestMs >= cutoffMs) {
-      return { file: f, lastUserAt: ts.lastUserAt, lastAssistantAt: ts.lastAssistantAt };
+      return {
+        file: f,
+        lastUserAt: ts.lastUserAt,
+        lastAssistantAt: ts.lastAssistantAt,
+        currentPermissionMode: ts.currentPermissionMode,
+      };
     }
   }
   return null;
@@ -188,14 +203,18 @@ export function findActiveSession(
  * AI 処理状態判定 (work_state) に使う。
  *
  * 末尾から走査して各タイプ最初の 1 件で early break。
+ * 併せて、末尾走査中に最初に観測した permissionMode を「現行モード」として返す
+ * （permission-mode タイプの transition record、または user/assistant record の
+ *  permissionMode フィールドのどちらでも採用）。観測できなければ "manual"（default）。
  */
 export function readLastEventTimestamps(
   file: SessionFile,
-): { lastUserAt: Date | null; lastAssistantAt: Date | null } {
+): { lastUserAt: Date | null; lastAssistantAt: Date | null; currentPermissionMode: PermissionMode } {
   const text = readFileSync(file.path, "utf8");
   const lines = text.split("\n");
   let lastUser: Date | null = null;
   let lastAssistant: Date | null = null;
+  let mode: PermissionMode | null = null;
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i]!;
     if (line.length === 0) continue;
@@ -205,13 +224,20 @@ export function readLastEventTimestamps(
     } catch {
       continue;
     }
+    if (mode === null && rec.permissionMode) {
+      mode = normalizePermissionMode(rec.permissionMode);
+    }
     if (!rec.timestamp) continue;
     if (rec.type === "user" && !lastUser) {
       lastUser = new Date(rec.timestamp);
     } else if (rec.type === "assistant" && !lastAssistant) {
       lastAssistant = new Date(rec.timestamp);
     }
-    if (lastUser && lastAssistant) break;
+    if (lastUser && lastAssistant && mode !== null) break;
   }
-  return { lastUserAt: lastUser, lastAssistantAt: lastAssistant };
+  return {
+    lastUserAt: lastUser,
+    lastAssistantAt: lastAssistant,
+    currentPermissionMode: mode ?? "manual",
+  };
 }

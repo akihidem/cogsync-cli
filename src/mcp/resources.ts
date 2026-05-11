@@ -20,6 +20,7 @@ import {
   type PhaseState,
 } from "../coach/phase.ts";
 import { JsonStore } from "../state/store.ts";
+import type { DeepWorkBuckets, DeepWorkPersisted } from "../infer/work_state.ts";
 import { fetchActiveBlockCached, CcusageError } from "../observers/ccusage.ts";
 import { computeWindowStatus } from "../infer/window5h.ts";
 import {
@@ -110,22 +111,51 @@ export async function buildLimitsState(
 // state/deepwork
 // ──────────────────────────────────────────────────────────────────────────────
 
+/**
+ * minutes は manual+auto+bypass の総分。バケット別内訳も同梱する。
+ * 旧クライアント互換のため minutes フィールドは残す。
+ */
+export type DeepWorkDayBreakdown = {
+  date: string;
+  minutes: number;
+  manual: number;
+  auto: number;
+  bypass: number;
+};
 export type DeepWorkPayload = {
-  today: { date: string; minutes: number };
-  history: Array<{ date: string; minutes: number }>;
+  today: DeepWorkDayBreakdown;
+  history: Array<DeepWorkDayBreakdown>;
 };
 
 export function buildDeepWorkState(
-  raw: { byDate?: Record<string, number> } | null,
+  raw: DeepWorkPersisted | null,
   now: Date = new Date(),
 ): DeepWorkPayload {
   const byDate = raw?.byDate ?? {};
+  const byDateBuckets = raw?.byDateBuckets ?? {};
   const todayKey = ymd(now);
-  const todayMin = Math.round((byDate[todayKey] ?? 0) / 60000);
-  const history = Object.entries(byDate)
-    .map(([date, ms]) => ({ date, minutes: Math.round(ms / 60000) }))
+
+  const allDates = new Set<string>([...Object.keys(byDate), ...Object.keys(byDateBuckets)]);
+  const toBreakdown = (date: string): DeepWorkDayBreakdown => {
+    const buckets = byDateBuckets[date];
+    if (buckets) {
+      const manual = Math.round((buckets.manual ?? 0) / 60000);
+      const auto = Math.round((buckets.auto ?? 0) / 60000);
+      const bypass = Math.round((buckets.bypass ?? 0) / 60000);
+      return { date, minutes: manual + auto + bypass, manual, auto, bypass };
+    }
+    // 旧データ: byDate のみ。manual に寄せる。
+    const m = Math.round((byDate[date] ?? 0) / 60000);
+    return { date, minutes: m, manual: m, auto: 0, bypass: 0 };
+  };
+
+  const today = allDates.has(todayKey)
+    ? toBreakdown(todayKey)
+    : { date: todayKey, minutes: 0, manual: 0, auto: 0, bypass: 0 };
+  const history = [...allDates]
+    .map((date) => toBreakdown(date))
     .sort((a, b) => a.date.localeCompare(b.date));
-  return { today: { date: todayKey, minutes: todayMin }, history };
+  return { today, history };
 }
 
 function ymd(d: Date): string {

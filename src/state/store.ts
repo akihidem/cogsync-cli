@@ -12,13 +12,19 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Phase, PhaseState } from "../coach/phase.ts";
+import type { DeepWorkPersisted } from "../infer/work_state.ts";
 
 export type PersistedState = {
-  /** スキーマバージョン。今後増やす可能性あり */
+  /**
+   * スキーマバージョン。
+   * 1: 現行。deepWork.byDate は ms 合計 (number) を保持。
+   *    新仕様の permissionMode バケット内訳は deepWork.byDateBuckets に並走させる
+   *    （旧バージョンが byDate のみ読んでも壊れないように設計）。
+   */
   schema: 1;
   phase?: PhaseState | null;
   /** ディープワーク累積（DeepWorkAccumulator.toJSON() の戻り値） */
-  deepWork?: { byDate: Record<string, number> } | null;
+  deepWork?: DeepWorkPersisted | null;
 };
 
 const EMPTY: PersistedState = { schema: 1, phase: null, deepWork: null };
@@ -76,13 +82,13 @@ export class JsonStore {
     return this.read().phase ?? null;
   }
 
-  saveDeepWork(data: { byDate: Record<string, number> }): void {
+  saveDeepWork(data: DeepWorkPersisted): void {
     const state = this.read();
     state.deepWork = data;
     this.write(state);
   }
 
-  loadDeepWork(): { byDate: Record<string, number> } | null {
+  loadDeepWork(): DeepWorkPersisted | null {
     return this.read().deepWork ?? null;
   }
 

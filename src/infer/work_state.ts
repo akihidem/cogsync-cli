@@ -11,12 +11,17 @@
  * ディープワーク累積:
  *   - active と ai_busy の合計時間を分単位で集計（人間がエンゲージしている時間）
  *   - 当日 (ローカルタイムゾーン) のみカウント
+ *   - permissionMode 別に "manual" / "auto" / "bypass" の 3 バケットへ分配する。
+ *     manual = 通常 (default) モード、auto = acceptEdits / plan 系、bypass = bypassPermissions。
  *
  * 注: ai_busy 中の長時間放置は「人間は別作業に出ている = ブレイク取得済み」と扱える
  *     → CO-5 ブレイク提案の根拠になる。
  */
 
 export type WorkState = "ai_busy" | "active" | "idle";
+/** ディープワーク集計バケット。permissionMode のクラス分け。 */
+export type PermissionBucket = "manual" | "auto" | "bypass";
+export const ALL_BUCKETS: readonly PermissionBucket[] = ["manual", "auto", "bypass"];
 
 export type WorkSnapshot = {
   state: WorkState;
@@ -103,48 +108,127 @@ export function classifyWorkState(
 }
 
 /**
+ * バケット別 ms。
+ */
+export type DeepWorkBuckets = { manual: number; auto: number; bypass: number };
+
+/**
+ * 永続化フォーマット。
+ *   - byDate          : ms 合計（旧フィールド、互換のため常に書き出す）
+ *   - byDateBuckets   : バケット別 ms（新フィールド、書き出し時は常に同梱）
+ * 旧バージョンの cogsync は byDate のみを読み取る。新バージョンは byDateBuckets を
+ * 優先し、無ければ byDate を manual に寄せて取り込む。schema は 1 のまま据え置く。
+ */
+export type DeepWorkPersisted = {
+  byDate: Record<string, number>;
+  byDateBuckets?: Record<string, DeepWorkBuckets>;
+};
+
+/**
  * ディープワーク累積追跡。
- * watch ループからの「snapshot 列」を順に受け、active/ai_busy 状態の時間を集計する。
+ * watch ループからの「snapshot 列」を順に受け、active/ai_busy 状態の時間を
+ * permissionMode バケット別に集計する。
  */
 export class DeepWorkAccumulator {
-  private accumMsByDate = new Map<string, number>(); // YYYY-MM-DD → ms
+  private accumByDate = new Map<string, DeepWorkBuckets>(); // YYYY-MM-DD → buckets ms
   private lastCheckAt: Date | null = null;
   private lastState: WorkState = "idle";
+  private lastBucket: PermissionBucket = "manual";
 
   /**
    * 新しい状態と時刻を受け取り、前回からの差分を「人間がエンゲージしていた時間」として累積する。
-   * 前回が active or ai_busy のときだけ加算。
+   * 前回が active or ai_busy のときだけ加算。差分は前回観測時点の bucket に分配する。
    */
-  feed(state: WorkState, at: Date = new Date()): void {
+  feed(state: WorkState, at: Date = new Date(), bucket: PermissionBucket = "manual"): void {
     if (this.lastCheckAt) {
       const deltaMs = at.getTime() - this.lastCheckAt.getTime();
       if (deltaMs > 0 && (this.lastState === "active" || this.lastState === "ai_busy")) {
         const dateKey = ymd(this.lastCheckAt);
-        this.accumMsByDate.set(dateKey, (this.accumMsByDate.get(dateKey) ?? 0) + deltaMs);
+        const cur = this.accumByDate.get(dateKey) ?? emptyBuckets();
+        cur[this.lastBucket] += deltaMs;
+        this.accumByDate.set(dateKey, cur);
       }
     }
     this.lastCheckAt = at;
     this.lastState = state;
+    this.lastBucket = bucket;
   }
 
+  /** 当日の総分（manual+auto+bypass）。 */
   todayMin(now: Date = new Date()): number {
-    return Math.round((this.accumMsByDate.get(ymd(now)) ?? 0) / 60000);
+    const b = this.accumByDate.get(ymd(now));
+    if (!b) return 0;
+    return Math.round((b.manual + b.auto + b.bypass) / 60000);
   }
 
-  snapshot(): { date: string; min: number }[] {
-    return [...this.accumMsByDate.entries()]
-      .map(([date, ms]) => ({ date, min: Math.round(ms / 60000) }))
+  /** 当日のバケット別分。 */
+  todayBreakdown(now: Date = new Date()): { manual: number; auto: number; bypass: number; total: number } {
+    const b = this.accumByDate.get(ymd(now)) ?? emptyBuckets();
+    const manual = Math.round(b.manual / 60000);
+    const auto = Math.round(b.auto / 60000);
+    const bypass = Math.round(b.bypass / 60000);
+    return { manual, auto, bypass, total: manual + auto + bypass };
+  }
+
+  snapshot(): { date: string; min: number; manual: number; auto: number; bypass: number }[] {
+    return [...this.accumByDate.entries()]
+      .map(([date, b]) => ({
+        date,
+        min: Math.round((b.manual + b.auto + b.bypass) / 60000),
+        manual: Math.round(b.manual / 60000),
+        auto: Math.round(b.auto / 60000),
+        bypass: Math.round(b.bypass / 60000),
+      }))
       .sort((a, b) => a.date.localeCompare(b.date));
   }
 
-  /** 永続化用のシリアライズ／復元 */
-  toJSON(): { byDate: Record<string, number> } {
-    return { byDate: Object.fromEntries(this.accumMsByDate) };
+  /**
+   * 永続化シリアライズ。
+   * byDate（旧互換：ms 合計）と byDateBuckets（新：バケット別 ms）の両方を書き出す。
+   */
+  toJSON(): DeepWorkPersisted {
+    const byDate: Record<string, number> = {};
+    const byDateBuckets: Record<string, DeepWorkBuckets> = {};
+    for (const [date, b] of this.accumByDate.entries()) {
+      byDate[date] = b.manual + b.auto + b.bypass;
+      byDateBuckets[date] = { ...b };
+    }
+    return { byDate, byDateBuckets };
   }
-  loadFromJSON(data: { byDate?: Record<string, number> } | null): void {
-    if (!data?.byDate) return;
-    this.accumMsByDate = new Map(Object.entries(data.byDate));
+
+  /**
+   * 両フォーマット対応で取り込む。
+   * byDateBuckets があれば優先。なければ byDate の number を manual に寄せる。
+   */
+  loadFromJSON(data: DeepWorkPersisted | null): void {
+    if (!data) return;
+    const next = new Map<string, DeepWorkBuckets>();
+    if (data.byDateBuckets) {
+      for (const [date, val] of Object.entries(data.byDateBuckets)) {
+        if (val && typeof val === "object") {
+          next.set(date, {
+            manual: typeof val.manual === "number" ? val.manual : 0,
+            auto: typeof val.auto === "number" ? val.auto : 0,
+            bypass: typeof val.bypass === "number" ? val.bypass : 0,
+          });
+        }
+      }
+    }
+    // byDate は補完用: byDateBuckets に同じ日付があればスキップ
+    if (data.byDate) {
+      for (const [date, val] of Object.entries(data.byDate)) {
+        if (next.has(date)) continue;
+        if (typeof val === "number") {
+          next.set(date, { manual: val, auto: 0, bypass: 0 });
+        }
+      }
+    }
+    this.accumByDate = next;
   }
+}
+
+function emptyBuckets(): DeepWorkBuckets {
+  return { manual: 0, auto: 0, bypass: 0 };
 }
 
 function ymd(d: Date): string {
