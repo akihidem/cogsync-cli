@@ -28,8 +28,21 @@ import { registerPrompts } from "./prompts.ts";
 const PKG_NAME = "cogsync-cli";
 const PKG_VERSION = "1.0.0-alpha.1";
 
+/**
+ * stderr 経由で起動ログを出す。Claude Code 等のクライアントは
+ * stdout を JSON-RPC に予約しているので、診断用ログは必ず stderr 側に流す。
+ * MCP クライアントの mcp-logs にはこの行は載らないが、`cogsync mcp 2>cogsync.log`
+ * のような手動診断時や、Claude Code が今後 stderr 取り込みに対応した時に役立つ。
+ */
+function logStartup(stage: string, extra: Record<string, unknown> = {}): void {
+  const line = JSON.stringify({ ts: new Date().toISOString(), stage, ...extra });
+  process.stderr.write(line + "\n");
+}
+
 export async function runMcpServer(): Promise<void> {
+  logStartup("boot", { pid: process.pid, ppid: process.ppid, node: process.version });
   const { config } = loadConfig();
+  logStartup("config-loaded");
   const store = new JsonStore();
   const ctx: ResourceContext = { config, store };
 
@@ -92,9 +105,22 @@ export async function runMcpServer(): Promise<void> {
 
   registerTools(server, ctx);
   registerPrompts(server);
+  logStartup("handlers-registered");
+
+  // 親プロセスが SIGTERM/SIGINT で落とした場合、確実に exit する。
+  // 既定では node はシグナルで死ぬが、明示しておく方が再接続時の race を減らせる。
+  // （観測: npm link 直後の MCP 再接続で旧プロセス exit と新プロセス spawn が
+  //  重なると、まれに新プロセスの initialize 応答が 30s タイムアウトする事象あり。）
+  const onSignal = (sig: NodeJS.Signals) => {
+    logStartup("signal", { sig });
+    process.exit(0);
+  };
+  process.once("SIGTERM", onSignal);
+  process.once("SIGINT", onSignal);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  logStartup("connected");
   // stdio transport は process.stdin の close で自動的に切断される
 }
 
