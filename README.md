@@ -1,146 +1,83 @@
-# cogsync-cli
+# cogsync
 
-> cogsync MVP 実装：CLI + デスクトップ通知で「AI のリミット回復サイクル」と「人間の集中サイクル」を同期させ、フェーズに応じた指南とタイマー指示を出す。
+> AI のリミット回復サイクル（Claude Code の 5h ブロック）と人間の集中サイクルを同期させる CLI コーチ。CLI と MCP サーバの両方で動作する。
 
-## このリポジトリの位置付け
+[![CI](https://github.com/akihidem/cogsync-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/akihidem/cogsync-cli/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/cogsync-cli/alpha.svg)](https://www.npmjs.com/package/cogsync-cli)
+[![license](https://img.shields.io/npm/l/cogsync-cli.svg)](./LICENSE)
 
-| | cogsync (調査) | **cogsync-cli (本リポ)** |
-| --- | --- | --- |
-| 役割 | 仕様策定・調査・コンセプト設計 | 実装。CLI で動く MVP |
-| URL | github.com/akihidem/cogsync | github.com/akihidem/cogsync-cli |
-| 状態 | v0.2 予備調査ノート | **v0.0 スケルトン**（責務定義のみ） |
-| 公開 | private | private |
+## 何をするか
 
-仕様の出典は cogsync 側の以下：
+Claude Code を長時間使う日、5h リミットの残量・雪だるま化したセッション・ディープワーク累積を観測して、フェーズに応じた指南（design / implement / review / break）と適応ポモドーロを出す。MCP サーバとしても起動でき、Claude Code 側から直接フェーズ切替・ハンドオフ生成ができる。
 
-- [`product/concept.md`](https://github.com/akihidem/cogsync/blob/main/product/concept.md) — コア仮説とストーリーボード
-- [`product/requirements.md`](https://github.com/akihidem/cogsync/blob/main/product/requirements.md) — 機能要件 ID（OB-/IN-/CO-/TI-/HO-）
-- [`product/mvp-scope.md`](https://github.com/akihidem/cogsync/blob/main/product/mvp-scope.md) — 段階リリース計画
-- [`product/coaching-prompts.md`](https://github.com/akihidem/cogsync/blob/main/product/coaching-prompts.md) — 通知文言テンプレ
-- [`product/mcp-server-spec.md`](https://github.com/akihidem/cogsync/blob/main/product/mcp-server-spec.md) — v1.0 で目指す MCP サーバ仕様
+- **観測**: `ccusage` の 5h ブロック + Claude Code raw JSONL を継続ポーリング
+- **推論**: 残量・枯渇予測・雪だるま検出・並列稼働分布から推奨フェーズを決定
+- **指南**: デスクトップ通知（macOS / Linux / Windows / WSL→PowerShell トースト）
+- **タイマー**: 適応ポモドーロ（AI 処理時間に応じて伸縮）
+- **ハンドオフ**: フェーズ移行時のプロンプト雛形をクリップボードへ
+- **MCP**: stdio で Resources / Tools / Prompts を Claude Code に公開
 
-## MVP（v0.1）スコープ
+## 必要環境
 
-| ID | 機能 | 状態 |
-| --- | --- | --- |
-| OB-1 | ccusage から 5h ブロック取得 | ✅ 子プロセス呼出 + TTL キャッシュ |
-| OB-2 | 5h ウィンドウ残量と終了時刻予測 | ✅ |
-| IN-2 | 雪だるま効果検出 | ✅ raw JSONL 走査、デフォ閾値 150k |
-| IN-3 | リミット枯渇までの予測 | ✅ |
-| IN-4 | スキル熟度推定 | ✅ `cogsync skill` コマンド (過去 30 日の並列稼働分布から p90) |
-| IN-5 | ディープワーク累積追跡 | ✅ DeepWorkAccumulator、watch で当日累積 |
-| CO-1 | フェーズ別モデル提案 | ✅ |
-| CO-3 | フェーズ移行時のハンドオフ・プロンプト生成 | ✅ |
-| CO-4 | リミット接近通知 | ✅ |
-| CO-5 | AI 処理中のディープ・ブレイク提案 | ✅ ai_busy 5 分超で `deep_break_suggested` |
-| TI-1 | 適応的ポモドーロ（AI 処理時間で動的伸縮） | ✅ `cogsync pomodoro start` |
-| HO-1 | ハンドオフ・プロンプトのテンプレ提供 | ✅ + `--llm` で Ollama 自動要約 |
-| HO-2 | クリップボード | ✅ clip.exe/wl-copy/xclip/pbcopy フォールバック |
-| HO-4 | MCP サーバ化 | 未着手 (v1.0) |
+- Node.js 20+
+- [`ccusage`](https://github.com/ryoppippi/ccusage) が `npx ccusage` で呼べる状態（Claude Code 利用者ならまず入っている）
 
-`docs/DESIGN.md` に内部設計、`src/` に責務スケルトンを配置済み。
-
-## 技術スタック
-
-| 層 | 採用 | 理由 |
-| --- | --- | --- |
-| ランタイム | Node.js 20+ | 既存環境で即動く。Bun への移行は v0.2 以降の検討事項 |
-| TS 実行 | tsx 4 | 開発時は `npx tsx src/index.ts` で起動、ビルド不要 |
-| 言語 | TypeScript（厳格モード） | ccusage / MCP SDK との親和性 |
-| ストレージ | better-sqlite3 | 同期 API、依存少、組み込み（v0.2 で導入） |
-| ファイル監視 | chokidar | クロスプラットフォーム（v0.2 で導入） |
-| 通知 | node-notifier | macOS / Linux / Windows（v0.1 で導入） |
-| 設定 | YAML（`js-yaml`） | 編集容易、コメント可 |
-| MCP（v1.0） | `@modelcontextprotocol/sdk` | 公式 |
-
-→ MVP は **CLI のみ・GUI なし**。GUI（Tauri）は MVP の有用性が確認できた v0.2 以降。
-→ v0.1 は ccusage 子プロセス呼び出しのため、依存は最小（commander + js-yaml）。SQLite / 通知 / 監視は機能を追加する v0.2 以降に依存追加する。
-
-## ディレクトリ構成
-
-```
-cogsync-cli/
-├── README.md             # 本ファイル
-├── package.json
-├── tsconfig.json
-├── docs/
-│   ├── DESIGN.md         # 内部設計とデータフロー
-│   └── ROADMAP.md        # MVP → v1.0 の段階計画
-├── src/
-│   ├── index.ts          # CLI エントリ（コマンド定義）
-│   ├── config.ts         # 設定ファイル読み込み
-│   ├── observers/        # 観測層（OB-*）
-│   │   ├── ccusage.ts
-│   │   └── claude_code.ts
-│   ├── infer/            # 推論層（IN-*）
-│   │   ├── window5h.ts
-│   │   ├── snowball.ts
-│   │   └── deepwork.ts
-│   ├── coach/            # 指南層（CO-*）
-│   │   ├── phase.ts
-│   │   └── advise.ts
-│   ├── timer/            # タイマー（TI-*）
-│   │   └── adaptive.ts
-│   ├── handoff/          # ハンドオフ（HO-*）
-│   │   └── template.ts
-│   ├── notify/           # OS 通知
-│   │   └── desktop.ts
-│   └── state/            # 永続化
-│       └── store.ts
-└── tests/                # 後で
-```
-
-## 起動コマンド
+## インストール
 
 ```bash
-npm install                                        # 依存インストール
-npm run status                                     # 現在の 5h ウィンドウ残量を 1 行表示
-npm run status -- --json                           # JSON 出力（プログラム消費用）
-npm run watch                                      # 常駐モード（ポーリング＋通知）
-npx tsx src/index.ts watch --once                  # 動作確認用ワンショット
-npx tsx src/index.ts config                        # 解決後の設定を表示
-npx tsx src/index.ts handoff --goal ... --state ... --next ...  # ハンドオフ生成＋クリップボード
-npx tsx src/index.ts handoff --llm                 # 現セッションを Ollama (gemma4) で自動要約
-npx tsx src/index.ts skill                         # 過去 30 日から並列稼働数を推定
-npx tsx scripts/backtest-window5h.ts               # 過去 5h ブロックの集計レポート
-npx tsx scripts/backtest-snowball.ts               # 雪だるま閾値の発火頻度
-npx tsx scripts/backtest-replay.ts --limit 20      # 時系列バックテスト
-npx tsx src/index.ts phase set design              # フェーズ手動切替
-npx tsx src/index.ts pomodoro start --focus 25 --break 5 --cycles 4  # 適応的ポモドーロ
+# グローバルインストール（α 版）
+npm install -g cogsync-cli@alpha
+
+# または npx
+npx cogsync-cli@alpha status
 ```
 
-### 実出力例
+## クイックスタート
+
+```bash
+cogsync status                # 現在の 5h ウィンドウ残量を 1 行表示
+cogsync status --json         # JSON 出力（他プログラムから消費）
+cogsync watch                 # 常駐モード。閾値超えで OS 通知
+cogsync phase set design      # 手動フェーズ切替
+cogsync pomodoro start        # 適応ポモドーロ
+cogsync handoff --title 認証 --goal "JWT を分離" --next "Cookie 経路を extract"
+cogsync mcp                   # MCP サーバ起動（stdio）
+```
+
+実行例:
 
 ```text
-$ npm run status
+$ cogsync status
 Claude 5h ウィンドウ | 残り 4h16m | (終了 17:00) | 累計 2.81M | 8,636 tok/min
 ```
 
 `残り` は **5h ウィンドウ終了時刻** と **現バーンレート想定の枯渇予測時刻** の早い方を採用。
-枯渇予測が先に来た場合は `(枯渇予測 HH:MM - 現バーンレート想定)` と表示される。
+枯渇予測が先に来た場合は `(枯渇予測 HH:MM - 現バーンレート想定)` を表示する。
 
-```text
-$ npx tsx src/index.ts watch --once
-[12:48:30] Claude 5h ウィンドウ | 残り 4h11m | (終了 17:00) | 累計 13.34M | 9,916 tok/min
+## MCP サーバとして使う
+
+Claude Code の `~/.claude/settings.json` などに登録:
+
+```json
+{
+  "mcpServers": {
+    "cogsync": {
+      "command": "cogsync",
+      "args": ["mcp"]
+    }
+  }
+}
 ```
 
-```text
-$ npx tsx src/index.ts handoff --title 認証 --goal "JWT を分離" --state "extract 済み" --next "Cookie 経路を extract" --decision "JWT は別 MW"
-# Handoff: 認証
-- Goal: JWT を分離
-- State: extract 済み
-- Decisions:
-  - JWT は別 MW
-- Open Questions:
-  (none)
-- Next Action: Cookie 経路を extract
-[Created by cogsync at 2026-04-30T...]
-[cogsync] copied to clipboard via clip.exe
-```
+提供する Resource / Tool / Prompt の一覧は [`docs/MCP.md`](./docs/MCP.md) 参照。代表的なものは:
 
-### 設定
+- Resource: `cogsync://state/window5h`, `cogsync://state/phase`, `cogsync://state/deepwork`
+- Tool: `set_phase`, `get_recommended_action`, `create_handoff`
+- Prompt: `coach_phase_transition`, `coach_break_suggestion`
 
-`~/.config/cogsync/config.yaml` で上書き可能。`--config <path>` または環境変数 `COGSYNC_CONFIG` でも上書き。
+## 設定
+
+`~/.config/cogsync/config.yaml` で上書き可能（`--config <path>` / `COGSYNC_CONFIG` 環境変数でも可）。
 
 ```yaml
 profile:
@@ -158,10 +95,55 @@ observers:
     pollingSec: 30
 ```
 
-## ライセンス
+## 主なコマンド
 
-MIT を予定（v1.0 公開時に確定）。
+| コマンド | 役割 |
+| --- | --- |
+| `cogsync status [--json]` | 5h ウィンドウ残量を 1 行表示 |
+| `cogsync watch [--once]` | 常駐ポーリング・通知 |
+| `cogsync phase set <design\|implement\|review\|break>` | フェーズ手動切替 |
+| `cogsync phase get` | 現フェーズ表示 |
+| `cogsync pomodoro start [--focus 25] [--break 5] [--cycles 4] [--no-adaptive]` | 適応ポモドーロ |
+| `cogsync handoff [--title] [--goal] [--state] [--next] [--llm]` | ハンドオフ雛形を生成・クリップボード |
+| `cogsync skill` | 過去 30 日の並列稼働分布から熟度を推定 |
+| `cogsync config` | 解決後の設定をダンプ |
+| `cogsync mcp` | MCP stdio サーバ起動 |
+
+`--help` で詳細オプションを表示。
+
+## アーキテクチャ
+
+```
+src/
+├── index.ts          # CLI エントリ
+├── config.ts         # 設定読み込み
+├── observers/        # 観測層（ccusage / claude_code raw JSONL）
+├── infer/            # 推論層（window5h / snowball / deepwork）
+├── coach/            # 指南層（phase / advise）
+├── timer/            # 適応ポモドーロ
+├── handoff/          # ハンドオフ雛形 + Ollama 要約
+├── notify/           # OS 通知（WSL→PowerShell トースト含む）
+├── state/            # フェーズ・累積の永続化
+└── mcp/              # MCP server (resources / tools / prompts)
+```
+
+詳細は [`docs/DESIGN.md`](./docs/DESIGN.md) / [`docs/ROADMAP.md`](./docs/ROADMAP.md)。
+
+## 開発
+
+```bash
+git clone https://github.com/akihidem/cogsync-cli.git
+cd cogsync-cli
+npm install
+npm run typecheck
+npm test
+npm run dev -- status   # tsx 経由でローカル実行
+```
 
 ## ステータス
 
-**v0.3.0-alpha.0**：MVP 全コマンドが動作。watch は ccusage 5h ブロック観測 + raw JSONL 雪だるま検出 + AI 処理状態判定 (active/ai_busy/idle) + DeepWorkAccumulator + advise + WSL→PowerShell トースト + TTL キャッシュ統合済み。`pomodoro start` で適応ポモドーロ、`skill` でスキル熟度推定、`handoff --llm` で Ollama 自動要約、`scripts/backtest-replay.ts` で時系列バックテスト。MCP サーバ化は v1.0。
+`v1.0.0-alpha`: CLI 全コマンド + MCP Resources / Tools / Prompts が動作。安定版（v1.0.0）は実利用フィードバックを経て確定する。
+
+## ライセンス
+
+[MIT](./LICENSE)
