@@ -26,7 +26,7 @@ import { registerTools } from "./tools.ts";
 import { registerPrompts } from "./prompts.ts";
 
 const PKG_NAME = "cogsync-cli";
-const PKG_VERSION = "1.0.0-alpha.0";
+const PKG_VERSION = "1.0.0-alpha.1";
 
 export async function runMcpServer(): Promise<void> {
   const { config } = loadConfig();
