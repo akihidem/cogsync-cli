@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.1] - 2026-05-11
+
+### Added
+
+- ディープワーク累積を Claude Code の permissionMode 別に 3 バケット (manual / auto / bypass) で集計。watch のステータス行に `dw=Nm(M:x/A:y/B:z) | mode=...` を表示。
+- MCP `cogsync://state/deepwork` リソースに `manual` / `auto` / `bypass` の内訳を追加。
+- 永続化フォーマットに `deepWork.byDateBuckets` を追加（schema=1 維持、旧 `byDate` と並走）。
+
+### Changed
+
+- `advise()` の dailyDeepWorkCap 判定は manual バケット単独で行うように変更（auto/bypass は除外）。
+
 ## [1.0.0-alpha.0] - 2026-05-11
 
 ### Added
