@@ -119,7 +119,11 @@ async function tick(ctx: Ctx, aiBusySince: Date | null): Promise<{ aiBusySince: 
 
   const sessionInfo = safeReadLatestSession(config);
   const snowball = sessionInfo
-    ? detectSnowball(readSessionSamples(sessionInfo.file), config.thresholds.snowballToken)
+    ? detectSnowball(
+        readSessionSamples(sessionInfo.file),
+        config.thresholds.snowballToken,
+        config.thresholds.snowballMinTurns,
+      )
     : null;
 
   const now = new Date();

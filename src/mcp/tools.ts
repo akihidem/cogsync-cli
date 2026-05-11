@@ -130,7 +130,11 @@ async function buildAdviseInput(ctx: ResourceContext): Promise<AdviseInput> {
   // 2. アクティブセッション → snowball, workState
   const sessionInfo = safeReadLatestSession(config);
   const snowball = sessionInfo
-    ? detectSnowball(readSessionSamples(sessionInfo.file), config.thresholds.snowballToken)
+    ? detectSnowball(
+        readSessionSamples(sessionInfo.file),
+        config.thresholds.snowballToken,
+        config.thresholds.snowballMinTurns,
+      )
     : null;
   const ws = sessionInfo
     ? classifyWorkState(sessionInfo.lastUserAt, sessionInfo.lastAssistantAt, now)

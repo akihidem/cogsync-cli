@@ -27,6 +27,8 @@ export type CogsyncConfig = {
   };
   thresholds: {
     snowballToken: number;
+    /** snowball 発火に必要な最小ターン数（heavy-context 起動時の誤発火抑制） */
+    snowballMinTurns: number;
     limitWarnMin: number;
     aiWaitBreakMin: number;
     /** アクティブ判定: 最新の user/assistant が直近 N 分以内ならアクティブ（top session 揺らぎ抑制） */
@@ -58,6 +60,9 @@ export const DEFAULT_CONFIG: CogsyncConfig = {
     // 80k だと 20% のセッションが triggered で多すぎる。
     // 150k (≈ p90 強) で 約 12% に絞り、本当に Lost-in-the-middle 圏のものを通知。
     snowballToken: 150_000,
+    // SessionStart フックや MEMORY.md 注入で初手から 150k を超える環境が
+    // あるため、最低 3 ターン進むまで snowball を抑止する。
+    snowballMinTurns: 3,
     limitWarnMin: 15,
     /** ai_busy がこの分以上続いたらブレイク提案（CO-5） */
     aiWaitBreakMin: 5,
