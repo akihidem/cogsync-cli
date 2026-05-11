@@ -202,6 +202,9 @@ function safeReadLatestSession(config: ResourceContext["config"]) {
     return findActiveSession(
       config.observers.claudeCode.logDir,
       config.thresholds.activeSessionWindowMin,
+      5,
+      new Date(),
+      process.ppid,
     );
   } catch {
     return null;

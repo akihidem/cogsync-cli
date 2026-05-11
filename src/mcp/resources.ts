@@ -175,6 +175,7 @@ export type ActiveSessionPayload = {
   last_user_at: string | null;
   last_assistant_at: string | null;
   cumulative_uncached_tokens: number | null;
+  resolution: "parent-pid" | "mtime-recent";
 } | null;
 
 export function buildActiveSessionState(
@@ -187,6 +188,7 @@ export function buildActiveSessionState(
     config.thresholds.activeSessionWindowMin,
     5,
     now,
+    process.ppid,
   );
   if (!active) return null;
   let cumulative: number | null = null;
@@ -207,6 +209,7 @@ export function buildActiveSessionState(
     last_user_at: active.lastUserAt?.toISOString() ?? null,
     last_assistant_at: active.lastAssistantAt?.toISOString() ?? null,
     cumulative_uncached_tokens: cumulative,
+    resolution: active.resolution,
   };
 }
 

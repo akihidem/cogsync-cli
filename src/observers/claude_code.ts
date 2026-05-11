@@ -10,6 +10,7 @@
 
 import { readdirSync, readFileSync, statSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { platform } from "node:os";
 
 export type SessionTokenSample = {
   sessionId: string;
@@ -157,14 +158,100 @@ export function snapshotRecentSessions(
 }
 
 /**
+ * Linux 専用: 指定 pid のプロセス起動時刻 (epoch ms) を返す。
+ * /proc/<pid>/stat (field 22) と /proc/stat (btime) と CLK_TCK から算出。
+ * 解決できなければ null。
+ *
+ * MCP server は Claude Code から stdio で spawn されるので、process.ppid が
+ * Claude Code のプロセス ID になる。その起動時刻を session JSONL の first_ts と
+ * 突き合わせれば「呼び出し元 Claude Code がどのセッションファイルを書いているか」
+ * を高精度に同定できる。
+ */
+export function readProcessStartMs(pid: number): number | null {
+  if (platform() !== "linux") return null;
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const rparen = stat.lastIndexOf(")");
+    if (rparen < 0) return null;
+    const fields = stat.slice(rparen + 2).split(" ");
+    const startJiffies = Number(fields[19]);
+    if (!Number.isFinite(startJiffies)) return null;
+    const stat2 = readFileSync("/proc/stat", "utf8");
+    const btimeLine = stat2.split("\n").find((l) => l.startsWith("btime "));
+    if (!btimeLine) return null;
+    const btime = Number(btimeLine.split(" ")[1]);
+    if (!Number.isFinite(btime)) return null;
+    const clkTck = 100;
+    return Math.round((btime + startJiffies / clkTck) * 1000);
+  } catch {
+    return null;
+  }
+}
+
+function readFirstTimestamp(path: string): Date | null {
+  try {
+    const text = readFileSync(path, "utf8");
+    for (const line of text.split("\n")) {
+      if (line.length === 0) continue;
+      try {
+        const rec = JSON.parse(line) as { timestamp?: string };
+        if (rec.timestamp) return new Date(rec.timestamp);
+      } catch {
+        continue;
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 呼び出し元 Claude Code (parent pid) の起動時刻と各 session JSONL の first_ts を
+ * 突き合わせ、最も近いものを返す。tolerance を超える差しか無ければ null。
+ *
+ * これにより、複数 Claude Code ウィンドウ並行起動時や、過去セッションが
+ * subagent 等で touch されている場合でも、呼び出し元自身のセッションを特定できる。
+ *
+ * @param toleranceMs  parent_start と first_ts のずれの許容範囲（既定 120 秒）
+ */
+export function resolveSessionByParentPid(
+  logDir: string,
+  parentPid: number | null | undefined,
+  toleranceMs = 120_000,
+  candidateLimit = 20,
+): SessionFile | null {
+  if (!parentPid) return null;
+  const parentStartMs = readProcessStartMs(parentPid);
+  if (parentStartMs === null) return null;
+  const files = listSessionFiles(logDir).slice(0, candidateLimit);
+  let best: { file: SessionFile; delta: number } | null = null;
+  for (const f of files) {
+    const firstTs = readFirstTimestamp(f.path);
+    if (!firstTs) continue;
+    const delta = Math.abs(firstTs.getTime() - parentStartMs);
+    if (delta > toleranceMs) continue;
+    if (best === null || delta < best.delta) best = { file: f, delta };
+  }
+  return best?.file ?? null;
+}
+
+/**
  * 「アクティブな」セッションを 1 件返す。
  *
- * 単純な mtime 降順 1 位だと、過去ログのちょっとした更新（subagent や別ホスト）で
- * top が pivot し、cumulative tokens が tick ごとに乱変動する問題があった。
- * 「最新の user/assistant イベントが直近 recentMin 分以内」のフィルタで真にアクティブな
- * セッションだけを採用する。
+ * 解決順序:
+ * 1. parentPid 指定時: 親プロセス（Claude Code）の起動時刻と各 session JSONL の
+ *    first_ts を突き合わせて確実に同定する（multi-window 対応）。
+ * 2. フォールバック: 「最新の user/assistant イベントが直近 recentMin 分以内」の
+ *    最 mtime セッション。standalone daemon (cogsync watch) のように parent が
+ *    Claude Code ではない呼び出し元向け。
  *
- * @param recentMin   このウィンドウ内の最新イベントを持つセッションのみ採用
+ * 単純な mtime 降順 1 位だと、過去ログのちょっとした更新（subagent や別ホスト）で
+ * top が pivot し、cumulative tokens が tick ごとに乱変動する問題があったため、
+ * MCP server からの呼び出しでは parentPid 経由の同定を優先する。
+ *
+ * @param parentPid   呼び出し元プロセス ID（MCP server 内では process.ppid）
+ * @param recentMin   フォールバック時の最新イベント許容ウィンドウ
  * @param candidateLimit  mtime 降順で上から確認する候補数
  */
 export function findActiveSession(
@@ -172,12 +259,25 @@ export function findActiveSession(
   recentMin = 5,
   candidateLimit = 5,
   now: Date = new Date(),
+  parentPid: number | null = null,
 ): {
   file: SessionFile;
   lastUserAt: Date | null;
   lastAssistantAt: Date | null;
   currentPermissionMode: PermissionMode;
+  resolution: "parent-pid" | "mtime-recent";
 } | null {
+  const byParent = resolveSessionByParentPid(logDir, parentPid);
+  if (byParent) {
+    const ts = readLastEventTimestamps(byParent);
+    return {
+      file: byParent,
+      lastUserAt: ts.lastUserAt,
+      lastAssistantAt: ts.lastAssistantAt,
+      currentPermissionMode: ts.currentPermissionMode,
+      resolution: "parent-pid",
+    };
+  }
   const cutoffMs = now.getTime() - recentMin * 60_000;
   const files = listSessionFiles(logDir).slice(0, candidateLimit);
   for (const f of files) {
@@ -192,6 +292,7 @@ export function findActiveSession(
         lastUserAt: ts.lastUserAt,
         lastAssistantAt: ts.lastAssistantAt,
         currentPermissionMode: ts.currentPermissionMode,
+        resolution: "mtime-recent",
       };
     }
   }
