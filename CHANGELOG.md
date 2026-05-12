@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.2] - 2026-05-12
+
+### Fixed
+
+- `findActiveSession` が複数 Claude Code ウィンドウ並行起動時に呼び出し元と無関係なセッションを誤検出し、`cumulative_uncached_tokens` が他セッション分を映していた問題を修正。`process.ppid` 経由で親 (Claude Code) の起動時刻を `/proc/<ppid>/stat` から算出し、各 JSONL の first_ts と 120 秒 tolerance で突き合わせて確実に同定する。解決失敗時 (非 Linux / standalone daemon) は従来の mtime-recent にフォールバック。
+
+### Added
+
+- `observers/claude_code.ts`: `readProcessStartMs(pid)` / `resolveSessionByParentPid(logDir, parentPid)` を公開 API として追加。
+- `ActiveSessionPayload` に `resolution: "parent-pid" | "mtime-recent"` フィールドを追加（解決経路の観測性向上）。
+- MCP サーバ起動時に boot / config-loaded / handlers-registered / connected の 4 段階を stderr に JSON line で記録。SIGTERM/SIGINT で明示 exit。最上位 `parseAsync().catch` で想定外例外を stderr に出して非ゼロ終了。
+
 ## [1.0.0-alpha.1] - 2026-05-11
 
 ### Added
