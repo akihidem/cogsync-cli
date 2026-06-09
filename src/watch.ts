@@ -31,9 +31,11 @@ import {
 } from "./infer/work_state.ts";
 import { advise, type Advice } from "./coach/advise.ts";
 import { createDesktopNotifier, type NotifyRequest } from "./notify/desktop.ts";
-import { JsonStore } from "./state/store.ts";
+import { JsonStore, defaultStatePath } from "./state/store.ts";
 import { isPhaseStale } from "./coach/phase.ts";
 import type { CogsyncConfig } from "./config.ts";
+import { dirname, join } from "node:path";
+import { acquireSingleInstanceLock } from "./util/singleton-lock.ts";
 
 type FiredKey = string;
 
@@ -45,6 +47,16 @@ export type WatchOptions = {
 
 export async function runWatch(opts: WatchOptions): Promise<void> {
   const { config } = opts;
+  // 常駐モードは 1 マシン 1 本に制限する（--once 診断は対象外）。起動方法（bashrc /
+  // systemd / 手動）に依らず、多重起動による deepwork 二重計上・通知重複を防ぐため、
+  // watch 本体で O_EXCL pidfile ロックを取る。
+  if (!opts.once) {
+    const lockPath = join(dirname(defaultStatePath()), "watch.lock");
+    if (!acquireSingleInstanceLock(lockPath)) {
+      console.error("[cogsync] 別の cogsync watch が既に稼働中のため終了します（多重起動防止）。");
+      return;
+    }
+  }
   const pollingSec = opts.pollingSecOverride ?? config.observers.ccusage.pollingSec;
   const notifier = createDesktopNotifier(config.notify.tone);
   const store = new JsonStore();
