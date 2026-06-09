@@ -231,7 +231,7 @@ function emptyBuckets(): DeepWorkBuckets {
   return { manual: 0, auto: 0, bypass: 0 };
 }
 
-function ymd(d: Date): string {
+export function ymd(d: Date): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
