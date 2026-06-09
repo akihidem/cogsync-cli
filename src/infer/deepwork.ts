@@ -7,15 +7,20 @@
  * cogsync (調査) report/02-cognition.md 参照。
  */
 
+import { ymd } from "./work_state.ts";
+
 export type DeepWorkAccum = {
   date: string; // YYYY-MM-DD
   totalMin: number;
   spans: { startedAt: Date; endedAt: Date; min: number }[];
 };
 
-export function todaysAccum(_now: Date, _spans: DeepWorkAccum["spans"]): DeepWorkAccum {
-  // TODO v0.2
-  throw new Error("todaysAccum not implemented (v0.2)");
+export function todaysAccum(now: Date, spans: DeepWorkAccum["spans"]): DeepWorkAccum {
+  // 「当日」= now のローカル日付。span はその開始日 (startedAt) でその日に属すと判定する。
+  const date = ymd(now);
+  const todays = spans.filter((s) => ymd(s.startedAt) === date);
+  const totalMin = Math.round(todays.reduce((sum, s) => sum + s.min, 0));
+  return { date, totalMin, spans: todays };
 }
 
 export function shouldWarnDailyCap(_accum: DeepWorkAccum, _capMin: number): boolean {
