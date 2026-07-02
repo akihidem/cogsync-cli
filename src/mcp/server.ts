@@ -26,7 +26,7 @@ import { registerTools } from "./tools.ts";
 import { registerPrompts } from "./prompts.ts";
 
 const PKG_NAME = "cogsync-cli";
-const PKG_VERSION = "1.0.0-alpha.2";
+const PKG_VERSION = "1.0.0-alpha.3";
 
 /**
  * stderr 経由で起動ログを出す。Claude Code 等のクライアントは

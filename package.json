@@ -1,10 +1,10 @@
 {
   "name": "cogsync-cli",
-  "version": "1.0.0-alpha.2",
+  "version": "1.0.0-alpha.3",
   "description": "AI のリミット回復サイクル（5h ブロック）と人間の集中サイクルを同期させる CLI コーチ。MCP サーバとしても動作。",
   "type": "module",
   "bin": {
-    "cogsync": "./bin/cogsync.js"
+    "cogsync": "bin/cogsync.js"
   },
   "files": [
     "bin",

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.3] - 2026-07-02
+
 ### Added
 
 - 週次 pacing: `cogsync statusline` サブコマンドを追加。Claude Code の `statusLine` フックから
