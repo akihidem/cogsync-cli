@@ -38,6 +38,12 @@ import { dirname, join } from "node:path";
 import { acquireSingleInstanceLock } from "./util/singleton-lock.ts";
 import { readSnapshot } from "./observers/statusline_snapshot.ts";
 import { computeWeeklyStatus, type RateLimitSnapshot, type WeeklyStatus } from "./infer/weekly.ts";
+import {
+  DeferQueue,
+  DEFERRABLE_TEMPLATES,
+  isDeferralActive,
+  buildDeliveries,
+} from "./notify/defer.ts";
 
 type FiredKey = string;
 
@@ -70,6 +76,8 @@ export async function runWatch(opts: WatchOptions): Promise<void> {
    * 化けても、同じ templateId は cooldown 期間内に再通知しない。
    */
   const lastFiredAtByTemplate = new Map<string, number>();
+  // 繰延キューを store から復元（watch 再起動で消えない）。不正データは空キューに回復。
+  const deferQueue = DeferQueue.fromJSON(store.loadDeferQueue());
   let aiBusySince: Date | null = null;
   let lastSavedAt = 0;
 
@@ -90,7 +98,7 @@ export async function runWatch(opts: WatchOptions): Promise<void> {
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
 
-  const ctx = { notifier, fired, lastFiredAtByTemplate, config, store, accum };
+  const ctx = { notifier, fired, lastFiredAtByTemplate, config, store, accum, deferQueue };
   const result = await tick(ctx, aiBusySince);
   aiBusySince = result.aiBusySince;
   if (opts.once) {
@@ -123,10 +131,11 @@ type Ctx = {
   config: CogsyncConfig;
   store: JsonStore;
   accum: DeepWorkAccumulator;
+  deferQueue: DeferQueue;
 };
 
 async function tick(ctx: Ctx, aiBusySince: Date | null): Promise<{ aiBusySince: Date | null }> {
-  const { config, store, accum, fired, lastFiredAtByTemplate, notifier } = ctx;
+  const { config, store, accum, fired, lastFiredAtByTemplate, notifier, deferQueue } = ctx;
   const pollingSec = config.observers.ccusage.pollingSec;
 
   const window = await safeFetchWindow(pollingSec);
@@ -176,6 +185,14 @@ async function tick(ctx: Ctx, aiBusySince: Date | null): Promise<{ aiBusySince: 
     phaseState != null && isPhaseStale(phaseState, config.thresholds.phaseStaleHours, now);
   const phase = phaseState && !phaseExpired ? phaseState.phase : "implement";
 
+  // 繰延: 保護フェーズ中かつ phase が新鮮なら戦略系通知を境界まで保留する（§9 E5）。
+  const deferralActive = isDeferralActive(
+    phaseState,
+    config.notify.deferDuringPhases,
+    config.thresholds.phaseStaleHours,
+    now,
+  );
+
   // status 行
   const statusBits: string[] = [`[${nowHHMMSS()}]`];
   if (window) statusBits.push(formatStatusLine(window));
@@ -193,6 +210,29 @@ async function tick(ctx: Ctx, aiBusySince: Date | null): Promise<{ aiBusySince: 
   statusBits.push(`| mode=${bucket}`);
   statusBits.push(`| phase=${phase}${phaseExpired ? "(stale→default)" : ""}`);
   console.log(statusBits.join(" "));
+
+  // --- 繰延キューの drain（advice 生成より前。境界越え/安全弁超過/TTL 切れを処理）---
+  // 送信は send entry 単位で fired/cooldown を登録するため、同 tick の advice が
+  // 同じ key を再度キューに積むのを防げる（drain を先、advice を後にするのが要）。
+  {
+    const { send, dropped } = deferQueue.drainDue(now, deferralActive, {
+      maxDeferMin: config.notify.maxDeferMin,
+    });
+    if (send.length > 0 || dropped.length > 0) {
+      for (const e of send) {
+        fired.add(e.key);
+        lastFiredAtByTemplate.set(e.templateId, now.getTime());
+      }
+      for (const d of buildDeliveries(send)) {
+        await notifier.notify({ template: d.templateId, severity: d.severity, vars: d.vars });
+      }
+      for (const e of dropped) {
+        console.log(`  -> [defer] dropped stale ${e.templateId}（queued ${e.queuedAt}）`);
+      }
+      if (send.length > 0) console.log(`  -> [defer] delivered ${send.length} 件（境界）`);
+      store.saveDeferQueue(deferQueue.toJSON());
+    }
+  }
 
   const adv: Advice = advise({
     phase,
@@ -224,6 +264,20 @@ async function tick(ctx: Ctx, aiBusySince: Date | null): Promise<{ aiBusySince: 
     if (lastAt != null && now.getTime() - lastAt < cooldownMs) {
       return { aiBusySince: nextAiBusySince };
     }
+  }
+
+  // 保護フェーズ中の戦略系通知は境界まで繰延する（§9 E5）。
+  // fired/cooldown は「送信時」に登録するため、ここでは登録しない（キュー投入時に
+  // 登録すると、TTL 破棄された通知が「送った扱い」で永久に消える）。同 key は enqueue
+  // が後着で置換するので、毎 tick 再投入しても最新 vars に更新されるだけでスパムしない。
+  if (DEFERRABLE_TEMPLATES.has(adv.templateId) && deferralActive) {
+    deferQueue.enqueue(
+      { key, templateId: adv.templateId, severity: severityFor(adv), vars: adv.vars ?? {} },
+      now,
+    );
+    store.saveDeferQueue(deferQueue.toJSON());
+    console.log(`  -> [defer] queued ${adv.templateId}（phase ${phaseState?.phase}・境界で配送）`);
+    return { aiBusySince: nextAiBusySince };
   }
 
   fired.add(key);

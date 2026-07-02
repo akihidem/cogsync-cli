@@ -88,6 +88,23 @@ Claude 5h ウィンドウ | 残り 4h16m | (終了 17:00) | 累計 2.81M | 8,636
 受理し、両方欠落・型不正のときのみ無視する。契約 fixture:
 [cogsync repo `data/statusline-rate-limits-sample.json`](https://github.com/akihidem/cogsync)。
 
+## 通知の繰延（deep 中は境界まで待つ）
+
+`cogsync watch` は、設計・実装フェーズ（`notify.deferDuringPhases`、既定 `["design","implement"]`）の
+最中は、戦略系の通知（週次ペース超過・雪だるま検出）を**フェーズ境界まで保留**する。深い集中の
+最中に割り込まないための設計で、境界を越えたら保留分をまとめて 1 通で届ける（cogsync repo §9 E5＝
+繰延で deep 中の割り込みを 0 化、代償は handback 遅延 平均 16 分）。
+
+- **繰延するのは戦略系だけ**: 週次ペース・雪だるまのみ。リミット接近／枯渇予測（分単位で手遅れ）、
+  ディープワーク上限（中断させること自体が目的）、ポモドーロ系は繰延せず即時通知する。
+- **安全弁**: 保護フェーズが続いても `notify.maxDeferMin`（既定 60 分）を超えた項目は流す。
+  24 時間を超えた項目は送らず破棄する（昨日の警告を今日届けない。まだ真なら再検知される）。
+- 保留中はキューを `state.json` に永続化するので `watch` を再起動しても消えない。
+  `cogsync status` に保留件数が表示される。
+- `phase` が未設定・stale・`review`／`break` のときは繰延せず即時通知（保護は明示的に集中中のときだけ）。
+
+`cogsync phase set implement` などでフェーズを宣言しておくと繰延が効く（宣言が無ければ即時通知のまま）。
+
 ## MCP サーバとして使う
 
 Claude Code の `~/.claude/settings.json` などに登録:
@@ -133,7 +150,7 @@ observers:
 
 | コマンド | 役割 |
 | --- | --- |
-| `cogsync status [--json]` | 5h ウィンドウ残量＋週次ペースを表示 |
+| `cogsync status [--json]` | 5h ウィンドウ残量＋週次ペース＋繰延保留件数を表示 |
 | `cogsync statusline` | Claude Code `statusLine` フック用。rate_limits を観測・永続化し 1 行返す |
 | `cogsync watch [--once]` | 常駐ポーリング・通知 |
 | `cogsync phase set <design\|implement\|review\|break>` | フェーズ手動切替 |
@@ -157,7 +174,7 @@ src/
 ├── coach/            # 指南層（phase / advise）
 ├── timer/            # 適応ポモドーロ
 ├── handoff/          # ハンドオフ雛形 + Ollama 要約
-├── notify/           # OS 通知（WSL→PowerShell トースト含む）
+├── notify/           # 通知層（OS 通知/WSL→PowerShell トースト・defer 繰延キュー）
 ├── state/            # フェーズ・累積の永続化
 └── mcp/              # MCP server (resources / tools / prompts)
 ```

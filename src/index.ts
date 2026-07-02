@@ -18,6 +18,8 @@ import {
 import { copyToClipboard } from "./util/clipboard.ts";
 import { readSnapshot, runStatusline } from "./observers/statusline_snapshot.ts";
 import { computeWeeklyStatus, formatWeeklyLine } from "./infer/weekly.ts";
+import { JsonStore } from "./state/store.ts";
+import { DeferQueue } from "./notify/defer.ts";
 
 const program = new Command();
 
@@ -81,24 +83,35 @@ program
           staleAfterMin: config.thresholds.weeklySnapshotStaleMin,
         })
       : null;
+    // 繰延キューの保留件数（読み取りのみ。store が壊れていても status は落とさない）。
+    let deferredCount = 0;
+    try {
+      deferredCount = DeferQueue.fromJSON(new JsonStore().loadDeferQueue()).size;
+    } catch {
+      deferredCount = 0;
+    }
+    const deferLine =
+      deferredCount > 0 ? `繰延通知 ${deferredCount} 件保留中（フェーズ境界で配送）` : null;
 
     try {
       const block = await fetchActiveBlock(Number(opts.timeout));
       if (!block) {
         if (opts.json) {
-          console.log(JSON.stringify({ active: false, weekly }));
+          console.log(JSON.stringify({ active: false, weekly, deferredCount }));
         } else {
           console.log("Claude 5h ウィンドウ: アクティブなブロックなし（直近 5 時間に Claude Code 未使用）");
           if (weekly) console.log(formatWeeklyLine(weekly));
+          if (deferLine) console.log(deferLine);
         }
         return;
       }
       const status = computeWindowStatus(block);
       if (opts.json) {
-        console.log(JSON.stringify({ active: true, status, weekly }, null, 2));
+        console.log(JSON.stringify({ active: true, status, weekly, deferredCount }, null, 2));
       } else {
         console.log(formatStatusLine(status));
         if (weekly) console.log(formatWeeklyLine(weekly));
+        if (deferLine) console.log(deferLine);
       }
     } catch (err) {
       if (err instanceof CcusageError) {

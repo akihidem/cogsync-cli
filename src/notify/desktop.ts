@@ -94,6 +94,10 @@ const TEMPLATES: Record<string, (vars: Record<string, string | number>) => Rende
     title: `pomodoro #${v["cycle"]} — back to focus`,
     body: `休憩終了。次の集中フェーズへ。`,
   }),
+  deferred_digest: (v) => ({
+    title: `cogsync — 繰延していた通知 ${v["count"]} 件`,
+    body: String(v["summary"] ?? ""),
+  }),
 };
 
 export interface DesktopNotifier {

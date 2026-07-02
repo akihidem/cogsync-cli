@@ -25,6 +25,12 @@ export type PersistedState = {
   phase?: PhaseState | null;
   /** ディープワーク累積（DeepWorkAccumulator.toJSON() の戻り値） */
   deepWork?: DeepWorkPersisted | null;
+  /**
+   * 繰延通知キュー（DeferQueue.toJSON() の戻り値 = DeferredEntry[]）。
+   * 型検証は notify/defer.ts 側（DeferQueue.fromJSON）。field なしの旧 state は
+   * 空キューとして読める（後方互換。schema は上げない）。
+   */
+  deferQueue?: unknown;
 };
 
 const EMPTY: PersistedState = { schema: 1, phase: null, deepWork: null };
@@ -90,6 +96,16 @@ export class JsonStore {
 
   loadDeepWork(): DeepWorkPersisted | null {
     return this.read().deepWork ?? null;
+  }
+
+  saveDeferQueue(data: unknown): void {
+    const state = this.read();
+    state.deferQueue = data;
+    this.write(state);
+  }
+
+  loadDeferQueue(): unknown {
+    return this.read().deferQueue ?? null;
   }
 
   get path_(): string {

@@ -23,6 +23,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   yellow レベルでは発火しない。`watch` デーモン・MCP `get_recommended_action` の両方から発火する。
 - `config.ts`: `thresholds.weeklyRedMarginPct`（既定 14.3）/ `thresholds.weeklySnapshotStaleMin`
   （既定 60 分）を追加。
+- 通知繰延キュー: deep（保護フェーズ）中の戦略系通知（週次ペース・雪だるま）をフェーズ境界まで
+  保留し、境界でまとめて届ける（cogsync repo §9 E5＝deep 中の割り込みを 0 化）。
+  - `src/notify/defer.ts`: `DeferQueue`（enqueue は同 key を後着で置換／drainDue は
+    「境界越えで全件送信・安全弁 maxDeferMin 超過で送信・TTL 24h 超で破棄」）、
+    `isDeferralActive`（保護フェーズ×新鮮のみ true）、`buildDeliveries`（2 件以上は
+    `deferred_digest` 1 通に集約）。時刻は全て引数 `now` 注入。永続データの不正 entry は個別に破棄。
+  - 繰延対象は戦略系のみ（`weekly_pace_exceeded` / `snowball_detected`）。時間クリティカル系
+    （`limit_approaching` / `burn_exhaustion`）・中断が目的の `deepwork_cap_reached`・
+    pomodoro 系・運用系は即時のまま。
+  - `watch`: fired/cooldown は「送信時」に登録（キュー投入時に登録すると TTL 破棄された通知が
+    永久に消える）。キューは `state.json` の `deferQueue` に永続化（再起動で消えない・旧 state 後方互換）。
+  - `config.ts`: `notify.deferDuringPhases`（既定 `["design","implement"]`）/ `notify.maxDeferMin`（既定 60）。
+  - `cogsync status`: 保留件数を 1 行表示。`--json` に `deferredCount`。
 
 ## [1.0.0-alpha.2] - 2026-05-12
 

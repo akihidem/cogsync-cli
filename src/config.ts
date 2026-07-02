@@ -14,6 +14,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import yaml from "js-yaml";
+import type { Phase } from "./coach/phase.ts";
 
 export type CogsyncConfig = {
   profile: {
@@ -51,6 +52,13 @@ export type CogsyncConfig = {
   notify: {
     tone: "neutral" | "librarian" | "coach" | "kansai";
     quietDuringAiWork: boolean;
+    /**
+     * 繰延を効かせる保護フェーズ。この phase 中は戦略系通知（週次ペース・雪だるま）を
+     * フェーズ境界まで保留する。根拠: cogsync repo §9 E5（deep 中の割り込みを 0 化）。
+     */
+    deferDuringPhases: Phase[];
+    /** 繰延の安全弁（分）。保護フェーズが続いてもこの分を超えた項目は流す（黙って飲み込まない）。 */
+    maxDeferMin: number;
   };
 };
 
@@ -85,6 +93,8 @@ export const DEFAULT_CONFIG: CogsyncConfig = {
   notify: {
     tone: "neutral",
     quietDuringAiWork: true,
+    deferDuringPhases: ["design", "implement"],
+    maxDeferMin: 60,
   },
 };
 
