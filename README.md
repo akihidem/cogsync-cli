@@ -6,6 +6,10 @@
 [![npm](https://img.shields.io/npm/v/cogsync-cli/alpha.svg)](https://www.npmjs.com/package/cogsync-cli)
 [![license](https://img.shields.io/npm/l/cogsync-cli.svg)](./LICENSE)
 
+> 📘 **はじめての方は [使い方ガイド `docs/USAGE.md`](./docs/USAGE.md) を先に読んでください。**
+> 5 分セットアップ・毎日の使い方（時系列）・コマンド逆引き・困ったとき、を平易にまとめています。
+> 以下の README は仕様リファレンスです。
+
 ## 何をするか
 
 Claude Code を長時間使う日、5h リミットの残量・雪だるま化したセッション・ディープワーク累積を観測して、フェーズに応じた指南（design / implement / review / break）と適応ポモドーロを出す。MCP サーバとしても起動でき、Claude Code 側から直接フェーズ切替・ハンドオフ生成ができる。
