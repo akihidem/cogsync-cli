@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- 週次 pacing: `cogsync statusline` サブコマンドを追加。Claude Code の `statusLine` フックから
+  `rate_limits`（statusline JSON）を観測・永続化し、週次の消費ペースが予算線（1 週間均等消費の
+  理論値）を超過していないかを判定する（「木曜飢饉」対策。cogsync repo §9 E1）。
+- `src/infer/weekly.ts`: `computeWeeklyStatus` / `formatWeeklyLine` / `formatWeeklySegment` /
+  `formatWeekdayHHMM`（純関数、時刻は引数 `now` で注入）。
+- `src/observers/statusline_snapshot.ts`: `parseStatuslinePayload`（厳格 parse。five_hour /
+  seven_day は独立に欠落を許容）/ `persistSnapshot` / `readSnapshot`（`~/.local/state/cogsync/statusline.json`、
+  XDG_STATE_HOME 尊重、原子的書き込み）/ `runStatusline`。
+- `cogsync status` に週次行を追加表示（stale なら `(stale)` 表示）。`--json` にも `weekly` を含める。
+- `advise()` の優先順位に「3: 週次 red」を追加（雪だるま・5h 接近リミットの次点、deepwork cap の
+  手前）。`throttle_batch` アクション・`weekly_pace_exceeded` テンプレを発火。stale な snapshot や
+  yellow レベルでは発火しない。`watch` デーモン・MCP `get_recommended_action` の両方から発火する。
+- `config.ts`: `thresholds.weeklyRedMarginPct`（既定 14.3）/ `thresholds.weeklySnapshotStaleMin`
+  （既定 60 分）を追加。
+
 ## [1.0.0-alpha.2] - 2026-05-12
 
 ### Fixed

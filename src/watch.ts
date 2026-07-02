@@ -36,6 +36,8 @@ import { isPhaseStale } from "./coach/phase.ts";
 import type { CogsyncConfig } from "./config.ts";
 import { dirname, join } from "node:path";
 import { acquireSingleInstanceLock } from "./util/singleton-lock.ts";
+import { readSnapshot } from "./observers/statusline_snapshot.ts";
+import { computeWeeklyStatus, type RateLimitSnapshot, type WeeklyStatus } from "./infer/weekly.ts";
 
 type FiredKey = string;
 
@@ -144,6 +146,15 @@ async function tick(ctx: Ctx, aiBusySince: Date | null): Promise<{ aiBusySince: 
     : { state: "idle" as WorkState, lastUserAt: null, lastAssistantAt: null, reason: "no session" };
   const bucket: PermissionBucket = sessionInfo?.currentPermissionMode ?? "manual";
 
+  // 週次 pacing（statusline snapshot 由来。statusLine フック未設定なら snap=null で weekly も null）
+  const snap = safeReadSnapshot();
+  const weekly = snap
+    ? computeWeeklyStatus(snap, now, {
+        redMarginPct: config.thresholds.weeklyRedMarginPct,
+        staleAfterMin: config.thresholds.weeklySnapshotStaleMin,
+      })
+    : null;
+
   // ai_busy 起算時刻の更新
   let nextAiBusySince: Date | null;
   if (ws.state === "ai_busy") {
@@ -195,13 +206,14 @@ async function tick(ctx: Ctx, aiBusySince: Date | null): Promise<{ aiBusySince: 
     limitWarnMin: config.thresholds.limitWarnMin,
     dailyDeepWorkCapMin: config.profile.dailyDeepWorkCapMin,
     aiWaitBreakMin: config.thresholds.aiWaitBreakMin,
+    weekly,
   });
 
   if (adv.action === "continue" || !adv.templateId) {
     return { aiBusySince: nextAiBusySince };
   }
 
-  const dedupBase = pickDedupKey(adv, sessionInfo, window);
+  const dedupBase = pickDedupKey(adv, sessionInfo, window, weekly);
   const key: FiredKey = `${dedupBase}:${adv.templateId}`;
   if (fired.has(key)) return { aiBusySince: nextAiBusySince };
 
@@ -232,12 +244,16 @@ function pickDedupKey(
   adv: Advice,
   sessionInfo: { file: SessionFile } | null,
   window: WindowStatus | null,
+  weekly: WeeklyStatus | null,
 ): string {
   if (adv.templateId === "snowball_detected" || adv.templateId === "deep_break_suggested") {
     return sessionInfo?.file.sessionId ?? "no-session";
   }
   if (adv.templateId === "deepwork_cap_reached") {
     return new Date().toISOString().slice(0, 10); // 1 日 1 回
+  }
+  if (adv.templateId === "weekly_pace_exceeded") {
+    return weekly?.resetsAt.toISOString() ?? "no-weekly"; // 週次ウィンドウ単位
   }
   return window?.endsAt.toISOString() ?? "no-window";
 }
@@ -275,6 +291,16 @@ function safeReadLatestSession(config: CogsyncConfig): {
   }
 }
 
+function safeReadSnapshot(): RateLimitSnapshot | null {
+  try {
+    return readSnapshot();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[cogsync] safeReadSnapshot: ${msg}`);
+    return null;
+  }
+}
+
 function severityFor(adv: Advice): "info" | "nudge" | "warn" | "critical" {
   switch (adv.templateId) {
     case "burn_exhaustion":
@@ -284,6 +310,8 @@ function severityFor(adv: Advice): "info" | "nudge" | "warn" | "critical" {
     case "deep_break_suggested":
       return "nudge";
     case "deepwork_cap_reached":
+      return "warn";
+    case "weekly_pace_exceeded":
       return "warn";
     default:
       return "info";

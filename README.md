@@ -54,6 +54,40 @@ Claude 5h ウィンドウ | 残り 4h16m | (終了 17:00) | 累計 2.81M | 8,636
 `残り` は **5h ウィンドウ終了時刻** と **現バーンレート想定の枯渇予測時刻** の早い方を採用。
 枯渇予測が先に来た場合は `(枯渇予測 HH:MM - 現バーンレート想定)` を表示する。
 
+## 週次 pacing（statusline 連携）
+
+5h ウィンドウの表示だけでは「木曜飢饉」（週の後半でリミットが尽きる）を防げない。Claude Code の
+`statusLine` フックに `cogsync statusline` を登録すると、メッセージ毎に渡ってくる `rate_limits`
+（5h / 7日の使用率）を観測・永続化し、週次の消費ペースが「予算線」（1 週間を均等消費した場合の
+理論値）を超えていないかを毎回判定できるようになる。
+
+`~/.claude/settings.json` に登録:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "cogsync statusline"
+  }
+}
+```
+
+登録すると:
+
+- 毎メッセージ、Claude Code から渡される JSON（`rate_limits.five_hour` / `seven_day`）を
+  `~/.local/state/cogsync/statusline.json` に永続化する（ccusage 呼び出し・ネットワーク通信なし。高速）
+- `cogsync status` に週次行が追加表示される（例:
+  `週次ペース red | 消費 78.0% | 予算線 65.3% (+12.7pt) | 枯渇予測 木 14:00`）。永続化データが
+  古い（既定 60 分超）場合は行末に `(stale)` が付く。`--json` にも `weekly` フィールドとして含まれる
+- `cogsync watch` / MCP `get_recommended_action` が週次 red（予算線を大きく超過）を検知すると
+  `throttle_batch` を助言する（通知テンプレ `weekly_pace_exceeded`）。予算線をわずかに超えただけの
+  yellow は通知しない（うるさいコーチにしない）
+
+**フィールドは独立に欠落しうる**: `rate_limits.five_hour` と `seven_day` は Claude Code 側の仕様上、
+互いに独立に欠落しうる（例: 5h のみ・7日のみが届くこともある）。cogsync はどちらか一方が有効なら
+受理し、両方欠落・型不正のときのみ無視する。契約 fixture:
+[cogsync repo `data/statusline-rate-limits-sample.json`](https://github.com/akihidem/cogsync)。
+
 ## MCP サーバとして使う
 
 Claude Code の `~/.claude/settings.json` などに登録:
@@ -99,7 +133,8 @@ observers:
 
 | コマンド | 役割 |
 | --- | --- |
-| `cogsync status [--json]` | 5h ウィンドウ残量を 1 行表示 |
+| `cogsync status [--json]` | 5h ウィンドウ残量＋週次ペースを表示 |
+| `cogsync statusline` | Claude Code `statusLine` フック用。rate_limits を観測・永続化し 1 行返す |
 | `cogsync watch [--once]` | 常駐ポーリング・通知 |
 | `cogsync phase set <design\|implement\|review\|break>` | フェーズ手動切替 |
 | `cogsync phase get` | 現フェーズ表示 |
@@ -117,8 +152,8 @@ observers:
 src/
 ├── index.ts          # CLI エントリ
 ├── config.ts         # 設定読み込み
-├── observers/        # 観測層（ccusage / claude_code raw JSONL）
-├── infer/            # 推論層（window5h / snowball / deepwork）
+├── observers/        # 観測層（ccusage / claude_code raw JSONL / statusline snapshot）
+├── infer/            # 推論層（window5h / snowball / deepwork / weekly pacing）
 ├── coach/            # 指南層（phase / advise）
 ├── timer/            # 適応ポモドーロ
 ├── handoff/          # ハンドオフ雛形 + Ollama 要約

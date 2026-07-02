@@ -17,6 +17,8 @@ import { computeWindowStatus, type WindowStatus } from "../infer/window5h.ts";
 import { findActiveSession, readSessionSamples } from "../observers/claude_code.ts";
 import { detectSnowball } from "../infer/snowball.ts";
 import { classifyWorkState } from "../infer/work_state.ts";
+import { readSnapshot } from "../observers/statusline_snapshot.ts";
+import { computeWeeklyStatus, type WeeklyStatus } from "../infer/weekly.ts";
 import type { ResourceContext } from "./resources.ts";
 
 export function registerTools(server: McpServer, ctx: ResourceContext): void {
@@ -170,6 +172,9 @@ async function buildAdviseInput(ctx: ResourceContext): Promise<AdviseInput> {
   const deepWorkAccumMin = Math.round(totalMs / 60000);
   const deepWorkManualMin = Math.round(manualMs / 60000);
 
+  // 6. 週次 pacing（statusline snapshot 由来）
+  const weekly = safeReadWeekly(config, now);
+
   return {
     phase,
     window,
@@ -182,6 +187,7 @@ async function buildAdviseInput(ctx: ResourceContext): Promise<AdviseInput> {
     limitWarnMin: config.thresholds.limitWarnMin,
     dailyDeepWorkCapMin: config.profile.dailyDeepWorkCapMin,
     aiWaitBreakMin: config.thresholds.aiWaitBreakMin,
+    weekly,
   };
 }
 
@@ -206,6 +212,19 @@ function safeReadLatestSession(config: ResourceContext["config"]) {
       new Date(),
       process.ppid,
     );
+  } catch {
+    return null;
+  }
+}
+
+function safeReadWeekly(config: ResourceContext["config"], now: Date): WeeklyStatus | null {
+  try {
+    const snap = readSnapshot();
+    if (!snap) return null;
+    return computeWeeklyStatus(snap, now, {
+      redMarginPct: config.thresholds.weeklyRedMarginPct,
+      staleAfterMin: config.thresholds.weeklySnapshotStaleMin,
+    });
   } catch {
     return null;
   }

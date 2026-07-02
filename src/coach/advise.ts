@@ -9,6 +9,7 @@ import type { Phase } from "./phase.ts";
 import type { WindowStatus } from "../infer/window5h.ts";
 import type { SnowballState } from "../infer/snowball.ts";
 import type { WorkState } from "../infer/work_state.ts";
+import { formatWeekdayHHMM, type WeeklyStatus } from "../infer/weekly.ts";
 
 export type Advice = {
   action:
@@ -16,7 +17,8 @@ export type Advice = {
     | "create_handoff"
     | "take_break"
     | "switch_model"
-    | "stop_for_today";
+    | "stop_for_today"
+    | "throttle_batch";
   rationale: string;
   confidence: number;
   /** notify テンプレ ID（必要時のみ） */
@@ -25,7 +27,8 @@ export type Advice = {
     | "limit_approaching"
     | "burn_exhaustion"
     | "deepwork_cap_reached"
-    | "deep_break_suggested";
+    | "deep_break_suggested"
+    | "weekly_pace_exceeded";
   /** notify テンプレに渡す変数 */
   vars?: Record<string, string | number>;
 };
@@ -52,6 +55,8 @@ export type AdviseInput = {
   dailyDeepWorkCapMin: number;
   /** 設定: ai_busy がこの分以上ならブレイク提案 */
   aiWaitBreakMin: number;
+  /** 週次 pacing（statusline snapshot 由来）。未取得や sevenDay 欠落時は null */
+  weekly?: WeeklyStatus | null;
 };
 
 export function advise(input: AdviseInput): Advice {
@@ -94,7 +99,38 @@ export function advise(input: AdviseInput): Advice {
     };
   }
 
-  // 優先順位 3: ディープワーク日次上限到達
+  // 優先順位 3: 週次 red（予算線超過）
+  // stale な snapshot は判定材料として信用しない（うるさいコーチ禁止と同じ理由で
+  // 古いデータに基づく誤発火を避ける）。yellow は通知しない（continue に落とす）。
+  const weekly = input.weekly;
+  if (weekly && !weekly.stale && weekly.level === "red") {
+    const sign = weekly.paceDeltaPct >= 0 ? "+" : "";
+    const paceDeltaPt = Math.round(weekly.paceDeltaPct * 10) / 10;
+    const budgetLinePct = Math.round(weekly.budgetLinePct * 10) / 10;
+    const usedPct = Math.round(weekly.usedPct * 10) / 10;
+    const exhaustionAt = weekly.projectedExhaustionAt ? formatWeekdayHHMM(weekly.projectedExhaustionAt) : null;
+    // red には 2 経路ある: 予算線超過(pace) と 100% 到達(cap)。
+    // cap 到達時に「+0pt 超過」と言うのは不正確なので文言を分ける。
+    const capReached = weekly.usedPct >= 100;
+    return {
+      action: "throttle_batch",
+      rationale: capReached
+        ? `週次枠を使い切りました（消費 ${usedPct}%）。リセットまで自律バッチは停止し、対話は最小限に。`
+        : `週次消費が予算線を ${sign}${paceDeltaPt}pt 超過（予算線 ${budgetLinePct}% / 消費 ${usedPct}%）。` +
+          (exhaustionAt ? `このままだと ${exhaustionAt} に枯渇。` : ""),
+      confidence: 0.8,
+      templateId: "weekly_pace_exceeded",
+      vars: {
+        reason: capReached ? "cap_reached" : "pace_exceeded",
+        pace_delta_pt: paceDeltaPt,
+        budget_line_pct: budgetLinePct,
+        used_pct: usedPct,
+        projected_exhaustion_at: exhaustionAt ?? "",
+      },
+    };
+  }
+
+  // 優先順位 4: ディープワーク日次上限到達
   // cap 判定は manual バケットのみで行う（auto/bypass は AI に丸投げの時間なので
   // 認知負荷が低い前提）。manual が未指定なら従来通り total を使う。
   const capMin = input.deepWorkManualMin ?? input.deepWorkAccumMin;
@@ -112,7 +148,7 @@ export function advise(input: AdviseInput): Advice {
     };
   }
 
-  // 優先順位 4: AI 処理中の長時間待機 → ブレイク推奨 (CO-5)
+  // 優先順位 5: AI 処理中の長時間待機 → ブレイク推奨 (CO-5)
   if (input.workState === "ai_busy" && input.aiBusyDurationMin >= input.aiWaitBreakMin) {
     return {
       action: "take_break",

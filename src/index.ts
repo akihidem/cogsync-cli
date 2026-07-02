@@ -5,6 +5,7 @@
  * 詳細は docs/DESIGN.md / docs/ROADMAP.md。
  */
 
+import { readFileSync } from "node:fs";
 import { Command } from "commander";
 import { fetchActiveBlock, CcusageError } from "./observers/ccusage.ts";
 import { computeWindowStatus, formatStatusLine } from "./infer/window5h.ts";
@@ -15,6 +16,8 @@ import {
   type HandoffStruct,
 } from "./handoff/template.ts";
 import { copyToClipboard } from "./util/clipboard.ts";
+import { readSnapshot, runStatusline } from "./observers/statusline_snapshot.ts";
+import { computeWeeklyStatus, formatWeeklyLine } from "./infer/weekly.ts";
 
 const program = new Command();
 
@@ -69,21 +72,33 @@ program
   .option("--json", "JSON 形式で出力（プログラムから消費する用）")
   .option("--timeout <ms>", "ccusage 呼び出しのタイムアウト (ms)", "30000")
   .action(async (opts: { json?: boolean; timeout: string }) => {
+    const cliOpts = program.opts<{ config?: string }>();
+    const { config } = loadConfig({ override: cliOpts.config });
+    const snap = readSnapshot();
+    const weekly = snap
+      ? computeWeeklyStatus(snap, new Date(), {
+          redMarginPct: config.thresholds.weeklyRedMarginPct,
+          staleAfterMin: config.thresholds.weeklySnapshotStaleMin,
+        })
+      : null;
+
     try {
       const block = await fetchActiveBlock(Number(opts.timeout));
       if (!block) {
         if (opts.json) {
-          console.log(JSON.stringify({ active: false }));
+          console.log(JSON.stringify({ active: false, weekly }));
         } else {
           console.log("Claude 5h ウィンドウ: アクティブなブロックなし（直近 5 時間に Claude Code 未使用）");
+          if (weekly) console.log(formatWeeklyLine(weekly));
         }
         return;
       }
       const status = computeWindowStatus(block);
       if (opts.json) {
-        console.log(JSON.stringify({ active: true, status }, null, 2));
+        console.log(JSON.stringify({ active: true, status, weekly }, null, 2));
       } else {
         console.log(formatStatusLine(status));
+        if (weekly) console.log(formatWeeklyLine(weekly));
       }
     } catch (err) {
       if (err instanceof CcusageError) {
@@ -95,6 +110,41 @@ program
       }
       process.exit(1);
     }
+  });
+
+program
+  .command("statusline")
+  .description(
+    "Claude Code の statusLine 用。stdin の rate_limits を観測・永続化し 1 行返す（高速・失敗時も cogsync を返し exit 0）",
+  )
+  .action(() => {
+    let line = "cogsync";
+    try {
+      // TTY 直結（手動実行・設定ミス）では stdin を待たずに即フォールバック。
+      // statusLine フックは「絶対にブロックしない・壊さない」が最優先。
+      if (process.stdin.isTTY) {
+        console.log(line);
+        return;
+      }
+      const input = readFileSync(0, "utf8");
+      // status / watch / MCP と同じ設定値で判定しないと、同じ snapshot で
+      // 表示だけ level が食い違う。config 読込失敗時は既定値で続行。
+      let weekly: { redMarginPct: number; staleAfterMin: number } | undefined;
+      try {
+        const cliOpts = program.opts<{ config?: string }>();
+        const { config } = loadConfig({ override: cliOpts.config });
+        weekly = {
+          redMarginPct: config.thresholds.weeklyRedMarginPct,
+          staleAfterMin: config.thresholds.weeklySnapshotStaleMin,
+        };
+      } catch {
+        weekly = undefined;
+      }
+      line = runStatusline(input, { weekly }).line;
+    } catch {
+      // stdin 読み取り失敗等でも固定文字列にフォールバックし、statusline を壊さない。
+    }
+    console.log(line);
   });
 
 program

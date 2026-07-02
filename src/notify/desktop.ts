@@ -64,6 +64,21 @@ const TEMPLATES: Record<string, (vars: Record<string, string | number>) => Rende
       `AI 処理待ちが ${v["ai_busy_min"]} 分続いています。\n` +
       `${v["suggested_break_min"]} 分のディープ・ブレイクを推奨。今 PC から離れるのが最適です。`,
   }),
+  weekly_pace_exceeded: (v) =>
+    // red には 2 経路ある（advise.ts）。cap 到達時に「+0pt 超過」と言わない。
+    v["reason"] === "cap_reached"
+      ? {
+          title: "cogsync — 週次枠を使い切りました",
+          body: `週次消費 ${v["used_pct"]}%。リセットまで自律バッチは停止し、対話は最小限に。`,
+        }
+      : {
+          title: "cogsync — 週次ペース超過",
+          body:
+            `週次消費が予算線を +${v["pace_delta_pt"]}pt 超過（予算線 ${v["budget_line_pct"]}% / 消費 ${v["used_pct"]}%）。\n` +
+            (v["projected_exhaustion_at"]
+              ? `このままだと ${v["projected_exhaustion_at"]} に枯渇予測。ペースを落とすことを推奨。`
+              : `ペースを落とすことを推奨。`),
+        },
   pomodoro_focus_started: (v) => ({
     title: `pomodoro #${v["cycle"]} — focus`,
     body:

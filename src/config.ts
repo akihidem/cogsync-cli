@@ -37,6 +37,16 @@ export type CogsyncConfig = {
     notifyCooldownMin: number;
     /** phase 自動失効: phase set から N 時間経過したら未設定扱い（古い phase を引きずらない） */
     phaseStaleHours: number;
+    /**
+     * 週次 red 判定のマージン（pt）。paceDeltaPct（消費% − 予算線%）がこれを超えたら red。
+     * 根拠: cogsync repo §9 E1（週次が binding。「木曜飢饉」は 5h 表示では防げない）。
+     */
+    weeklyRedMarginPct: number;
+    /**
+     * statusline snapshot の鮮度しきい値（分）。capturedAt から N 分超で stale とみなし、
+     * 週次 red の通知を抑止する。根拠: cogsync repo §9 E1。
+     */
+    weeklySnapshotStaleMin: number;
   };
   notify: {
     tone: "neutral" | "librarian" | "coach" | "kansai";
@@ -69,6 +79,8 @@ export const DEFAULT_CONFIG: CogsyncConfig = {
     activeSessionWindowMin: 5,
     notifyCooldownMin: 15,
     phaseStaleHours: 6,
+    weeklyRedMarginPct: 14.3,
+    weeklySnapshotStaleMin: 60,
   },
   notify: {
     tone: "neutral",
