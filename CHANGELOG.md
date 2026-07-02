@@ -36,6 +36,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     永久に消える）。キューは `state.json` の `deferQueue` に永続化（再起動で消えない・旧 state 後方互換）。
   - `config.ts`: `notify.deferDuringPhases`（既定 `["design","implement"]`）/ `notify.maxDeferMin`（既定 60）。
   - `cogsync status`: 保留件数を 1 行表示。`--json` に `deferredCount`。
+- リザーブゲート: 自律バッチ（cron/banto）が「今バッチを走らせてよいか」を自主規制する口
+  （cogsync repo §8.7 P1 reserve(φ)・§9 E3）。在席時間のための 5h 窓リザーブ（残量が φ を割らないか）と
+  週次枠（red なら famine リスク）を見て allow / hold / unknown を返す。
+  - `src/coach/reserve.ts`: `evaluateReserveGate`（純関数・時計注入）＋ `readReserveInput`（snapshot IO アダプタ）。
+    判定順序は weekly red（確定 hold）→ 5h 測定不能（unknown）→ 5h リザーブ侵食（hold）→ allow。
+  - MCP tool `can_i_run_batch`（`estimatedUsagePct?` 任意）。
+  - CLI `cogsync can-i-run-batch [--json] [--estimated-usage-pct N]`：**exit 0(allow)/1(hold)**。
+    shell が `cogsync can-i-run-batch && ./nightly.sh` で自主規制できる（ccusage 不使用・高速）。
+  - `config.ts`: `thresholds.reservePhi`（既定 0.3）/ `thresholds.reserveGateOnUnknown`（既定 `allow`）。
 
 ## [1.0.0-alpha.2] - 2026-05-12
 

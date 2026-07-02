@@ -105,6 +105,33 @@ Claude 5h ウィンドウ | 残り 4h16m | (終了 17:00) | 累計 2.81M | 8,636
 
 `cogsync phase set implement` などでフェーズを宣言しておくと繰延が効く（宣言が無ければ即時通知のまま）。
 
+## 自律バッチのリザーブゲート（cron/banto の自主規制）
+
+夜間の自律バッチ（cron・自律エージェント）が subscription の 5h 枠を食い尽くすと、日中の対話が
+飢える。`cogsync can-i-run-batch` は「今バッチを走らせてよいか」を判定し、**exit 0（allow）/
+1（hold）**を返すので、shell からそのままゲートにできる:
+
+```bash
+# 5h 残量が在席リザーブ（既定 φ=0.3）を割らず、週次も red でなければ実行
+cogsync can-i-run-batch && ./nightly-batch.sh
+
+# バッチの 5h 消費見込みを見込んで判定（残量 − 見込み ≥ φ か）
+cogsync can-i-run-batch --estimated-usage-pct 40 && ./heavy-job.sh
+```
+
+判定の内訳:
+
+- **週次 red** なら hold（週次が binding。famine リスク）。
+- **5h 残量が φ（`thresholds.reservePhi`、既定 0.3＝30%）を割る**なら hold（在席時間のリザーブを守る）。
+- statusLine 未設定などで 5h 残量が観測できないときは `unknown`。既定は通す（`allow`）が、
+  `thresholds.reserveGateOnUnknown: deny` で止める側に倒せる。
+- 副作用なし・ccusage 呼び出しなし（statusline snapshot だけを見るので高速）。
+
+MCP から使う場合は tool `can_i_run_batch`（`estimatedUsagePct?` 任意）が同じ verdict を JSON で返す。
+`cogsync can-i-run-batch --json` でも同じオブジェクトが得られる。
+
+> 前提: 5h/週次の観測には statusLine 連携（上記「週次 pacing」）が要る。未設定だと `unknown` になる。
+
 ## MCP サーバとして使う
 
 Claude Code の `~/.claude/settings.json` などに登録:
@@ -159,6 +186,7 @@ observers:
 | `cogsync handoff [--title] [--goal] [--state] [--next] [--llm]` | ハンドオフ雛形を生成・クリップボード |
 | `cogsync skill` | 過去 30 日の並列稼働分布から熟度を推定 |
 | `cogsync config` | 解決後の設定をダンプ |
+| `cogsync can-i-run-batch [--json] [--estimated-usage-pct N]` | 自律バッチ実行可否を判定（exit 0=allow/1=hold）。cron の自主規制用 |
 | `cogsync mcp` | MCP stdio サーバ起動 |
 
 `--help` で詳細オプションを表示。

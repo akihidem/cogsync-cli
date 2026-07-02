@@ -48,6 +48,13 @@ export type CogsyncConfig = {
      * 週次 red の通知を抑止する。根拠: cogsync repo §9 E1。
      */
     weeklySnapshotStaleMin: number;
+    /**
+     * リザーブ率 φ（0-1）。自律バッチ（cron/banto）の 5h 窓リザーブ。5h 残量がこれを
+     * 割るとバッチを止める（can_i_run_batch）。根拠: cogsync repo §9 E3（φ=0.3 で在席飢餓減）。
+     */
+    reservePhi: number;
+    /** 5h 残量が観測できない（statusLine 未設定/stale）とき、リザーブゲートを通すか止めるか。 */
+    reserveGateOnUnknown: "allow" | "deny";
   };
   notify: {
     tone: "neutral" | "librarian" | "coach" | "kansai";
@@ -89,6 +96,8 @@ export const DEFAULT_CONFIG: CogsyncConfig = {
     phaseStaleHours: 6,
     weeklyRedMarginPct: 14.3,
     weeklySnapshotStaleMin: 60,
+    reservePhi: 0.3,
+    reserveGateOnUnknown: "allow",
   },
   notify: {
     tone: "neutral",

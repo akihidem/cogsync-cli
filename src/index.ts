@@ -161,6 +161,42 @@ program
   });
 
 program
+  .command("can-i-run-batch")
+  .description(
+    "自律バッチ（cron/夜間処理）を今走らせてよいか判定し、exit 0(allow)/1(hold) を返す。" +
+      "shell から `cogsync can-i-run-batch && ./nightly.sh` で自主規制できる（ccusage 不使用・高速）。",
+  )
+  .option("--json", "verdict オブジェクトを JSON で出力")
+  .option("--estimated-usage-pct <n>", "このバッチが 5h 窓を追加消費する見込み（0-100 の pt）")
+  .action(async (opts: { json?: boolean; estimatedUsagePct?: string }) => {
+    const cliOpts = program.opts<{ config?: string }>();
+    const { config } = loadConfig({ override: cliOpts.config });
+    const { evaluateReserveGate, readReserveInput } = await import("./coach/reserve.ts");
+    // 安全ゲート用途なので、--estimated-usage-pct が指定されて不正なら黙って 0pt 扱い
+    // （＝allow に緩む）にせず、エラーで hold(exit 1) に倒す。
+    let est: number | undefined;
+    if (opts.estimatedUsagePct != null) {
+      const n = Number(opts.estimatedUsagePct);
+      if (!Number.isFinite(n) || n < 0 || n > 100) {
+        console.error(
+          `error: --estimated-usage-pct は 0-100 の数値で指定してください（受領: ${opts.estimatedUsagePct}）`,
+        );
+        process.exit(1);
+      }
+      est = n;
+    }
+    const input = readReserveInput(config, new Date(), est);
+    const verdict = evaluateReserveGate(input);
+    if (opts.json) {
+      console.log(JSON.stringify(verdict));
+    } else {
+      console.log(`${verdict.verdict}: ${verdict.reason}`);
+    }
+    // exit code: allow → 0 / hold・unknown-deny → 1。shell の && で自主規制できる。
+    process.exit(verdict.allow ? 0 : 1);
+  });
+
+program
   .command("watch")
   .description("常駐モード。ポーリングでリミットを観測し、閾値超えで通知")
   .option("--polling-sec <n>", "ポーリング間隔(秒)。設定値を上書き")

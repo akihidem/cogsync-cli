@@ -19,6 +19,7 @@ import { detectSnowball } from "../infer/snowball.ts";
 import { classifyWorkState } from "../infer/work_state.ts";
 import { readSnapshot } from "../observers/statusline_snapshot.ts";
 import { computeWeeklyStatus, type WeeklyStatus } from "../infer/weekly.ts";
+import { evaluateReserveGate, readReserveInput } from "../coach/reserve.ts";
 import type { ResourceContext } from "./resources.ts";
 
 export function registerTools(server: McpServer, ctx: ResourceContext): void {
@@ -78,6 +79,32 @@ export function registerTools(server: McpServer, ctx: ResourceContext): void {
             }),
           },
         ],
+      };
+    },
+  );
+
+  // ─── can_i_run_batch ─────────────────────────────────────────────────────────
+  server.registerTool(
+    "can_i_run_batch",
+    {
+      title: "自律バッチ実行可否",
+      description:
+        "自律バッチ（cron / 夜間処理）を今走らせてよいかを判定する。在席時間のための 5h 窓リザーブ（残量が φ を割らないか）と週次枠（red なら famine リスク）を見て allow / hold / unknown を返す。副作用なし。cron/自律エージェントの自主規制用。",
+      inputSchema: {
+        estimatedUsagePct: z
+          .number()
+          .min(0)
+          .max(100)
+          .optional()
+          .describe("このバッチが 5h 窓を追加消費する見込み（0-100 の pt）。省略可。"),
+      },
+      annotations: { destructiveHint: false, readOnlyHint: true },
+    },
+    (args) => {
+      const input = readReserveInput(ctx.config, new Date(), args.estimatedUsagePct);
+      const verdict = evaluateReserveGate(input);
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(verdict) }],
       };
     },
   );
