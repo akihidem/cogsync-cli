@@ -20,6 +20,8 @@ import { classifyWorkState } from "../infer/work_state.ts";
 import { readSnapshot } from "../observers/statusline_snapshot.ts";
 import { computeWeeklyStatus, type WeeklyStatus } from "../infer/weekly.ts";
 import { evaluateReserveGate, readReserveInput } from "../coach/reserve.ts";
+import { evaluateHandoffThreshold, readHandoffRuleInput } from "../coach/handoff_rule.ts";
+import { evaluatePriming, readPrimingInput } from "../coach/priming.ts";
 import type { ResourceContext } from "./resources.ts";
 
 export function registerTools(server: McpServer, ctx: ResourceContext): void {
@@ -106,6 +108,48 @@ export function registerTools(server: McpServer, ctx: ResourceContext): void {
       return {
         content: [{ type: "text" as const, text: JSON.stringify(verdict) }],
       };
+    },
+  );
+
+  // ─── should_i_handoff ────────────────────────────────────────────────────────
+  server.registerTool(
+    "should_i_handoff",
+    {
+      title: "ハンドオフ閾値判定",
+      description:
+        "5h 窓の補充を待つか、副系（別ベンダ等）へハンドオフするかを閾値則で判定する。待ちの費用（遅延費用×補充までの分）が移行の費用（固定費＋品質割引）を上回るなら handoff。副作用なし。",
+      inputSchema: {
+        taskValue: z.number().min(0).optional().describe("残タスクの価値 v。省略時は設定既定。"),
+      },
+      annotations: { destructiveHint: false, readOnlyHint: true },
+    },
+    (args) => {
+      const input = readHandoffRuleInput(ctx.config, new Date(), args.taskValue);
+      const verdict = evaluateHandoffThreshold(input);
+      return { content: [{ type: "text" as const, text: JSON.stringify(verdict) }] };
+    },
+  );
+
+  // ─── suggest_priming ─────────────────────────────────────────────────────────
+  server.registerTool(
+    "suggest_priming",
+    {
+      title: "プライミング提案",
+      description:
+        "集中作業（deep）を始める前に、5h 窓の状態から待つべきかを判定する。アクティブな窓は前倒しリセットできないため、消費済み×セッション後リセットなら wait_for_reset（リセットを待つか低予算を受け入れる）。期限切れ窓は次の発話が新窓を開くので不要。cogsync は AI を呼ばないので提案のみ。",
+      inputSchema: {
+        deepDurationMin: z
+          .number()
+          .min(0)
+          .optional()
+          .describe("予定している deep セッションの長さ（分）。省略時は設定既定。"),
+      },
+      annotations: { destructiveHint: false, readOnlyHint: true },
+    },
+    (args) => {
+      const input = readPrimingInput(ctx.config, new Date(), args.deepDurationMin);
+      const verdict = evaluatePriming(input);
+      return { content: [{ type: "text" as const, text: JSON.stringify(verdict) }] };
     },
   );
 

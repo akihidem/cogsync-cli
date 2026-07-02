@@ -197,6 +197,56 @@ program
   });
 
 program
+  .command("should-i-handoff")
+  .description(
+    "5h 窓の補充を待つか副系へハンドオフするかを閾値則で判定（命題4）。助言のみ・exit 0。",
+  )
+  .option("--json", "verdict を JSON で出力")
+  .option("--value <n>", "残タスクの価値 v")
+  .action(async (opts: { json?: boolean; value?: string }) => {
+    const cliOpts = program.opts<{ config?: string }>();
+    const { config } = loadConfig({ override: cliOpts.config });
+    const { evaluateHandoffThreshold, readHandoffRuleInput } = await import(
+      "./coach/handoff_rule.ts"
+    );
+    let taskValue: number | undefined;
+    if (opts.value != null) {
+      const n = Number(opts.value);
+      if (!Number.isFinite(n) || n < 0) {
+        console.error(`error: --value は 0 以上の数値で指定してください（受領: ${opts.value}）`);
+        process.exit(2);
+      }
+      taskValue = n;
+    }
+    const verdict = evaluateHandoffThreshold(readHandoffRuleInput(config, new Date(), taskValue));
+    console.log(opts.json ? JSON.stringify(verdict) : `${verdict.recommend}: ${verdict.reason}`);
+  });
+
+program
+  .command("suggest-priming")
+  .description(
+    "deep 前に 5h 窓をプライミング（開き直し）すべきか判定（命題2/E2）。提案のみ・exit 0。",
+  )
+  .option("--json", "verdict を JSON で出力")
+  .option("--deep-duration <n>", "予定 deep セッション長（分）")
+  .action(async (opts: { json?: boolean; deepDuration?: string }) => {
+    const cliOpts = program.opts<{ config?: string }>();
+    const { config } = loadConfig({ override: cliOpts.config });
+    const { evaluatePriming, readPrimingInput } = await import("./coach/priming.ts");
+    let deepDurationMin: number | undefined;
+    if (opts.deepDuration != null) {
+      const n = Number(opts.deepDuration);
+      if (!Number.isFinite(n) || n < 0) {
+        console.error(`error: --deep-duration は 0 以上の数値で指定してください（受領: ${opts.deepDuration}）`);
+        process.exit(2);
+      }
+      deepDurationMin = n;
+    }
+    const verdict = evaluatePriming(readPrimingInput(config, new Date(), deepDurationMin));
+    console.log(opts.json ? JSON.stringify(verdict) : `${verdict.action}: ${verdict.reason}`);
+  });
+
+program
   .command("watch")
   .description("常駐モード。ポーリングでリミットを観測し、閾値超えで通知")
   .option("--polling-sec <n>", "ポーリング間隔(秒)。設定値を上書き")

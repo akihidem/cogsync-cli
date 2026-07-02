@@ -55,6 +55,20 @@ export type CogsyncConfig = {
     reservePhi: number;
     /** 5h 残量が観測できない（statusLine 未設定/stale）とき、リザーブゲートを通すか止めるか。 */
     reserveGateOnUnknown: "allow" | "deny";
+    // ハンドオフ閾値則（命題4: c_d·(τ−t) > h + (1−q')·v で移す/待つ）。cogsync repo §8.8。
+    /** 遅延費用 /分 c_d。 */
+    handoffDelayCostPerMin: number;
+    /** ハンドオフ固定費用 h（コンテキスト再構築）。テンプレの質で下げられる。 */
+    handoffReconstructCost: number;
+    /** 副系の品質 q'（0-1）。1 なら同格（h だけが障壁）。 */
+    handoffSecondaryQuality: number;
+    /** --value 未指定時の既定タスク価値 v。 */
+    handoffDefaultTaskValue: number;
+    // アンカー・プライミング（命題2 + §9 E2）。
+    /** この使用率未満なら「まだ新しい」＝プライミング不要とする閾値（%）。 */
+    primeIfUsedPct: number;
+    /** --deep-duration 未指定時の既定 deep セッション長（分）。 */
+    primeDefaultDeepDurationMin: number;
   };
   notify: {
     tone: "neutral" | "librarian" | "coach" | "kansai";
@@ -98,6 +112,12 @@ export const DEFAULT_CONFIG: CogsyncConfig = {
     weeklySnapshotStaleMin: 60,
     reservePhi: 0.3,
     reserveGateOnUnknown: "allow",
+    handoffDelayCostPerMin: 1.0,
+    handoffReconstructCost: 20,
+    handoffSecondaryQuality: 0.9,
+    handoffDefaultTaskValue: 50,
+    primeIfUsedPct: 50,
+    primeDefaultDeepDurationMin: 120,
   },
   notify: {
     tone: "neutral",

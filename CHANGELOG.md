@@ -45,6 +45,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - CLI `cogsync can-i-run-batch [--json] [--estimated-usage-pct N]`：**exit 0(allow)/1(hold)**。
     shell が `cogsync can-i-run-batch && ./nightly.sh` で自主規制できる（ccusage 不使用・高速）。
   - `config.ts`: `thresholds.reservePhi`（既定 0.3）/ `thresholds.reserveGateOnUnknown`（既定 `allow`）。
+- 閾値則ハンドオフ: 5h 窓の補充を待つか副系へハンドオフするかを命題4で判定
+  （`delayCost·(τ−t) > h + (1−q')·v` なら handoff。cogsync repo §8.8）。
+  `src/coach/handoff_rule.ts`（純関数＋IO アダプタ）、MCP tool `should_i_handoff`、
+  CLI `cogsync should-i-handoff [--value N] [--json]`。境界（同値）は wait（保守）。
+  config: `thresholds.handoffDelayCostPerMin`(1.0)/`handoffReconstructCost`(20=h)/
+  `handoffSecondaryQuality`(0.9=q')/`handoffDefaultTaskValue`(50)。
+- プライミング提案: 集中作業の前に 5h 窓の状態から待つべきかを命題2/§9 E2 で判定。
+  アクティブな窓は ping で前倒しリセットできない（ping は現行窓を消費するだけ）ため、
+  アクティブ×消費済み×deep 後リセットは `wait_for_reset`（リセットを待つか低予算を受け入れる）。
+  期限切れ窓は次の発話が新窓を開く＝不要。`src/coach/priming.ts`（純関数＋IO アダプタ）、
+  MCP tool `suggest_priming`、CLI `cogsync suggest-priming [--deep-duration N] [--json]`。提案のみ。
+  config: `thresholds.primeIfUsedPct`(50)/`primeDefaultDeepDurationMin`(120)。
 
 ## [1.0.0-alpha.2] - 2026-05-12
 
